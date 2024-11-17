@@ -29,7 +29,9 @@
 #include <chrono>
 #include <fstream>
 #include <vector>
+
 #include <sstream>
+#include <cstring>
 
 #include "secure_rand.h"
 #include "structures.h"
@@ -57,6 +59,73 @@ __device__ int count_zero_bytes(uint32_t x) {
     n += ((x & 0xFF0000) == 0);
     n += ((x & 0xFF000000) == 0);
     return n;
+}
+
+__device__ int score_vanity(Address a) {
+    // Convert the address to an array of nibbles
+    uint8_t nibbles[40];
+    uint32_t words[5] = {a.a, a.b, a.c, a.d, a.e};
+
+    // Extract nibbles from the address
+    #pragma unroll
+    for (int i = 0; i < 5; ++i) {
+        uint32_t word = words[i];
+        for (int j = 0; j < 8; ++j) {
+            nibbles[i * 8 + (7 - j)] = word & 0xF;
+            word >>= 4;
+        }
+    }
+
+    int calculatedScore = 0;
+    int leadingZeroCount = 0;
+    int idx = 0;
+
+    // Count leading zero nibbles
+    while (idx < 40 && nibbles[idx] == 0) {
+        leadingZeroCount++;
+        idx++;
+    }
+
+    calculatedScore += leadingZeroCount * 10;
+
+    // Now check the leading fours
+    int leadingFourCount = 0;
+    while (idx < 40 && nibbles[idx] == 4) {
+        leadingFourCount++;
+        idx++;
+    }
+
+    // If the first non-zero nibble is not 4, return 0
+    if (leadingFourCount == 0) {
+        return 0;
+    } else if (leadingFourCount == 4) {
+        // 60 points if exactly 4 4s
+        calculatedScore += 60;
+    } else if (leadingFourCount > 4) {
+        // 40 points if more than 4 4s
+        calculatedScore += 40;
+    }
+
+    // 20 points if the first nibble after the four 4s is NOT a 4
+    if (leadingFourCount >= 4 && idx < 40 && nibbles[idx] != 4) {
+        calculatedScore += 20;
+    }
+
+    // 1 point for every 4 in the address
+    int totalFours = 0;
+    for (int i = 0; i < 40; ++i) {
+        if (nibbles[i] == 4) {
+            totalFours++;
+        }
+    }
+    calculatedScore += totalFours;
+
+    // If the last 4 nibbles are 4s, add 20 points
+    if (nibbles[36] == 4 && nibbles[37] == 4 && nibbles[38] == 4 && nibbles[39] == 4) {
+        calculatedScore += 20;
+    }
+
+    return calculatedScore;
 }
 
 __device__ int score_zero_bytes(Address a) {
@@ -102,6 +171,7 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
     int score = 0;
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
+    else if (score_method == 2) { score = score_vanity(a); }
 
     if (score >= device_memory[1]) {
         atomicMax_ul(&device_memory[1], score);
@@ -116,10 +186,12 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
     }
 }
 
+/* Update handle_output2 function */
 __device__ void handle_output2(int score_method, Address a, uint64_t key) {
     int score = 0;
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
+    else if (score_method == 2) { score = score_vanity(a); }
 
     if (score >= device_memory[1]) {
         atomicMax_ul(&device_memory[1], score);
@@ -529,7 +601,7 @@ void print_speeds(int num_devices, int* device_ids, double* speeds) {
 
 
 int main(int argc, char *argv[]) {
-    int score_method = -1; // 0 = leading zeroes, 1 = zeros
+    int score_method = -1; // 0 = leading zeroes, 1 = zeros, 2 = vanity
     int mode = 0; // 0 = address, 1 = contract, 2 = create2 contract, 3 = create3 proxy contract
     char* input_file = 0;
     char* input_address = 0;
@@ -549,6 +621,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--zeros") == 0 || strcmp(argv[i], "-z") == 0) {
             score_method = 1;
             i++;
+        } else if (strcmp(argv[i], "--vanity") == 0 || strcmp(argv[i], "-v") == 0) { // Added new option
+            score_method = 2;
+            i++;
         } else if (strcmp(argv[i], "--contract") == 0 || strcmp(argv[i], "-c") == 0) {
             mode = 1;
             i++;
@@ -561,7 +636,7 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--bytecode") == 0 || strcmp(argv[i], "-b") == 0) {
             input_file = argv[i + 1];
             i += 2;
-        } else if (strcmp(argv[i], "--bytecode-hash") == 0 || strcmp(argv[i], "-bh") == 0) { // Added new option
+        } else if (strcmp(argv[i], "--bytecode-hash") == 0 || strcmp(argv[i], "-bh") == 0) {
             input_bytecode_hash = argv[i + 1];
             i += 2;
         } else if  (strcmp(argv[i], "--address") == 0 || strcmp(argv[i], "-a") == 0) {
@@ -594,14 +669,14 @@ int main(int argc, char *argv[]) {
     }
 
     if ((mode == 2 || mode == 3) && !input_address) {
-        printf("You must specify an origin address when using --contract2\n");
+        printf("You must specify an origin address when using --contract2 or --contract3\n");
         return 1;
     } else if ((mode == 2 || mode == 3) && strlen(input_address) != 40 && strlen(input_address) != 42) {
         printf("The origin address must be 40 characters long\n");
         return 1;
     }
 
-    if (mode == 3 && !input_deployer_address) { // Adjusted condition
+    if (mode == 3 && !input_deployer_address) {
         printf("You must specify a deployer address when using --contract3\n");
         return 1;
     }
