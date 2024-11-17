@@ -372,31 +372,32 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     } else if (mode == 2 || mode == 3) {
         if (salt_prefix_length > 0) {
-            // Adjust max_key based on the number of bits remaining after the prefix
-            int random_bits = 256 - salt_prefix_length;
+            int prefix_bits = salt_prefix_length;
+            int random_bits = 256 - prefix_bits;
     
-            // Generate random bits for the remaining bits
-            _uint256 max_random_value = cpu_sub_256(cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits), _uint256{0,0,0,0,0,0,0,1});
+            // Generate random bits
+            _uint256 max_random_value = cpu_sub_256(
+                cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits),
+                _uint256{0,0,0,0,0,0,0,1}
+            );
             _uint256 random_bits_value;
-    
-            // Generate random bits (or set to zero if random bits are not required)
             int status = generate_secure_random_key(random_bits_value, max_random_value, random_bits);
             if (status) {
-                message_queue_mutex.lock();
-                message_queue.push(Message{milliseconds(), 10 + status});
-                message_queue_mutex.unlock();
-                return;
+                // Handle error
             }
     
-            // Shift random bits to the correct position (they are in lower bits, so no shift needed)
-            // Combine the prefix and random bits
-            base_random_key = cpu_or_256(cpu_shift_left_256(salt_prefix, random_bits), random_bits_value);
+            // No shift needed for random_bits_value; it occupies lower bits
+            // Combine prefix and random bits
+            base_random_key = cpu_or_256(salt_prefix, random_bits_value);
     
-            // Set the increment for the random bits
-            random_key_increment = _uint256{0, 0, 0, 0, 0, 0, 0, 1}; // Increment the random bits by 1 each iteration
+            // Increment for random bits
+            random_key_increment = _uint256{0, 0, 0, 0, 0, 0, 0, 1};
     
-            // Mask to keep the random bits within the correct range
-            _uint256 random_bits_mask = cpu_sub_256(cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits), _uint256{0,0,0,0,0,0,0,1});
+            // Mask to ensure random bits stay in their range
+            _uint256 random_bits_mask = cpu_sub_256(
+                cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits),
+                _uint256{0,0,0,0,0,0,0,1}
+            );
         } else {
             status = generate_secure_random_key(base_random_key, max_key, 256);
             if (status) {
@@ -620,8 +621,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
             random_bits_value = cpu_and_256(random_bits_value, random_bits_mask);
 
             // Combine the prefix and updated random bits
-            random_key = cpu_or_256(cpu_shift_left_256(salt_prefix, 256 - salt_prefix_length), random_bits_value);
-
+            random_key = cpu_or_256(salt_prefix, random_bits_value);
 
             output_counter_host[0] = 0;
             gpu_assert(cudaMemcpyToSymbol(device_memory, device_memory_host, sizeof(uint64_t)));
