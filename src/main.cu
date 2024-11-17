@@ -252,7 +252,10 @@ uint64_t milliseconds() {
 
 _uint256 cpu_shift_left_256(_uint256 value, int bits) {
     if (bits == 0) return value;
-    if (bits >= 256) return _uint256(0, 0, 0, 0, 0, 0, 0, 0);
+    if (bits >= 256) {
+        _uint256 zero = {0};
+        return zero;
+    }
 
     uint32_t parts[8] = {value.a, value.b, value.c, value.d, value.e, value.f, value.g, value.h};
     uint32_t result_parts[8] = {0};
@@ -267,22 +270,32 @@ _uint256 cpu_shift_left_256(_uint256 value, int bits) {
         }
     }
 
-    return _uint256(result_parts[0], result_parts[1], result_parts[2], result_parts[3],
-                    result_parts[4], result_parts[5], result_parts[6], result_parts[7]);
+    _uint256 result;
+    result.a = result_parts[0];
+    result.b = result_parts[1];
+    result.c = result_parts[2];
+    result.d = result_parts[3];
+    result.e = result_parts[4];
+    result.f = result_parts[5];
+    result.g = result_parts[6];
+    result.h = result_parts[7];
+    return result;
 }
 
+/* Define cpu_or_256 without arrays */
 _uint256 cpu_or_256(_uint256 a, _uint256 b) {
-    return _uint256(
-        a.a | b.a,
-        a.b | b.b,
-        a.c | b.c,
-        a.d | b.d,
-        a.e | b.e,
-        a.f | b.f,
-        a.g | b.g,
-        a.h | b.h
-    );
+    _uint256 result;
+    result.a = a.a | b.a;
+    result.b = a.b | b.b;
+    result.c = a.c | b.c;
+    result.d = a.d | b.d;
+    result.e = a.e | b.e;
+    result.f = a.f | b.f;
+    result.g = a.g | b.g;
+    result.h = a.h | b.h;
+    return result;
 }
+
 
 void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, std::vector<uint8_t> salt_prefix) {
     uint64_t GRID_WORK = ((uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK);
