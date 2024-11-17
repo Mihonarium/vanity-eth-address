@@ -91,6 +91,10 @@ __device__ int score_vanity(Address a) {
         return 0;
     }
 
+    if (leadingZeroCount < 4) {
+        return 0; // don't spend time on low scores
+    }
+
     // Add points for leading zeros
     calculatedScore += leadingZeroCount * 10;
 
@@ -106,7 +110,7 @@ __device__ int score_vanity(Address a) {
         calculatedScore += 40;
         
         // 20 points if the first nibble after the four 4s is NOT a 4
-        if (idx < 40 && nibbles[idx] != 4) {
+        if (consecutiveFours == 4) {
             calculatedScore += 20;
         }
     }
