@@ -250,6 +250,30 @@ uint64_t milliseconds() {
 }
 
 
+_uint256 cpu_shift_left_256(_uint256 value, int bits) {
+    if (bits == 0) return value;
+    _uint256 result = {0};
+    int words_shift = bits / 32;
+    int bits_shift = bits % 32;
+    for (int i = 7; i >= words_shift; --i) {
+        result.words[i] = value.words[i - words_shift] << bits_shift;
+        if (bits_shift != 0 && (i - words_shift - 1) >= 0) {
+            result.words[i] |= value.words[i - words_shift - 1] >> (32 - bits_shift);
+        }
+    }
+    return result;
+}
+
+/* Define cpu_or_256 */
+_uint256 cpu_or_256(_uint256 a, _uint256 b) {
+    _uint256 result;
+    for (int i = 0; i < 8; ++i) {
+        result.words[i] = a.words[i] | b.words[i];
+    }
+    return result;
+}
+
+
 void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, std::vector<uint8_t> salt_prefix) {
     uint64_t GRID_WORK = ((uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK);
 
@@ -278,6 +302,11 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     gpu_assert(cudaMemcpyToSymbol(device_memory, device_memory_host, 2 * sizeof(uint64_t)));
     gpu_assert(cudaDeviceSynchronize())
 
+    _uint256 max_key = _uint256(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+                                0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
+    int status;
+
+    int random_bits = 256;
 
     if (mode == 0 || mode == 1) {
         gpu_assert(cudaMalloc(&block_offsets, GRID_SIZE * sizeof(CurvePoint)))
@@ -286,7 +315,6 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         gpu_assert(cudaHostAlloc(&thread_offsets_host, BLOCK_SIZE * sizeof(CurvePoint), cudaHostAllocWriteCombined))
     }
 
-    _uint256 max_key;
     if (mode == 0 || mode == 1) {
         _uint256 GRID_WORK = cpu_mul_256_mod_p(cpu_mul_256_mod_p(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, 0, BLOCK_SIZE}), _uint256{0, 0, 0, 0, 0, 0, 0, GRID_SIZE});
         max_key = _uint256{0x7FFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x5D576E73, 0x57A4501D, 0xDFE92F46, 0x681B20A0};
@@ -304,8 +332,8 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         status = generate_secure_random_key(base_random_key, max_key, 255);
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     } else if (mode == 2 || mode == 3) {
-        int prefix_bits = salt_prefix.size() * 8;
-        int random_bits = 256 - prefix_bits;
+ int prefix_bits = salt_prefix.size() * 8;
+        random_bits = 256 - prefix_bits;
 
         if (random_bits < 0) {
             random_bits = 0;
@@ -315,13 +343,21 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
         // Ensure the random key fits within the remaining bits
         if (random_bits < 256) {
-            for (int i = 0; i < (random_bits / 32); ++i) {
-                base_random_key.u[i] = base_random_key.u[i + (256 - random_bits) / 32];
+            int shift = (256 - random_bits) / 32;
+            int bits_shift = (256 - random_bits) % 32;
+            for (int i = 0; i < (random_bits + 31) / 32; ++i) {
+                base_random_key.words[i] = base_random_key.words[i + shift];
+                if (bits_shift != 0 && (i + shift + 1) < 8) {
+                    base_random_key.words[i] = (base_random_key.words[i] << bits_shift) | (base_random_key.words[i + shift + 1] >> (32 - bits_shift));
+                } else if (bits_shift != 0) {
+                    base_random_key.words[i] <<= bits_shift;
+                }
             }
-            for (int i = random_bits / 32; i < 8; ++i) {
-                base_random_key.u[i] = 0;
+            for (int i = (random_bits + 31) / 32; i < 8; ++i) {
+                base_random_key.words[i] = 0;
             }
         }
+
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     }
 
@@ -469,15 +505,17 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
     if (mode == 2) {
         while (true) {
-            _uint256 prefix_uint256{0, 0, 0, 0, 0, 0, 0, 0};
+            _uint256 prefix_uint256;
             int prefix_bytes = salt_prefix.size();
             int prefix_words = (prefix_bytes + 3) / 4;
+            memset(prefix_uint256.words, 0, sizeof(prefix_uint256.words));
             for (int i = 0; i < prefix_words; ++i) {
                 uint32_t word = 0;
-                for (int j = 0; j < 4 && (i * 4 + j) < prefix_bytes; ++j) {
+                int bytes_in_word = ((prefix_bytes - i * 4) >= 4) ? 4 : (prefix_bytes - i * 4);
+                for (int j = 0; j < bytes_in_word; ++j) {
                     word = (word << 8) | salt_prefix[i * 4 + j];
                 }
-                prefix_uint256.u[7 - i] = word;
+                prefix_uint256.words[7 - i] = word;
             }
 
             // Combine prefix and random key
@@ -676,7 +714,7 @@ int main(int argc, char *argv[]) {
         } else if  (strcmp(argv[i], "--deployer-address") == 0 || strcmp(argv[i], "-da") == 0) {
             input_deployer_address = argv[i + 1];
             i += 2;
-        } else if (strcmp(argv[i], "--salt-prefix") == 0 || strcmp(argv[i], "-sp") == 0) { // Added new option
+        } else if (strcmp(argv[i], "--salt-prefix") == 0 || strcmp(argv[i], "-sp") == 0) {
             input_salt_prefix = argv[i + 1];
             i += 2;
         } else if  (strcmp(argv[i], "--work-scale") == 0 || strcmp(argv[i], "-w") == 0) {
@@ -715,6 +753,17 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    for (int i = 0; i < num_devices; i++) {
+        cudaError_t e = cudaSetDevice(device_ids[i]);
+        if (e != cudaSuccess) {
+            printf("Could not detect device %d\n", device_ids[i]);
+            return 1;
+        }
+    }
+
+    #define nothex(n) ((n < 48 || n > 57) && (n < 65 || n > 70) && (n < 97 || n > 102))
+
+
     std::vector<uint8_t> salt_prefix_bytes;
     if (mode == 2 && input_salt_prefix) {
         // Remove '0x' prefix if present
@@ -745,16 +794,6 @@ int main(int argc, char *argv[]) {
             salt_prefix_bytes.resize(32);
         }
     }
-
-    for (int i = 0; i < num_devices; i++) {
-        cudaError_t e = cudaSetDevice(device_ids[i]);
-        if (e != cudaSuccess) {
-            printf("Could not detect device %d\n", device_ids[i]);
-            return 1;
-        }
-    }
-
-    #define nothex(n) ((n < 48 || n > 57) && (n < 65 || n > 70) && (n < 97 || n > 102))
     _uint256 bytecode_hash;
     if (mode == 2 || mode == 3) {
         if (input_bytecode_hash) {
