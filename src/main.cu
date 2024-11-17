@@ -30,8 +30,9 @@
 #include <fstream>
 #include <vector>
 
-#include <sstream>
-#include <cstring>
+#include <sstream>  // For stringstream
+#include <cstring>  // For memset
+#include <vector>   // For vector
 
 #include "secure_rand.h"
 #include "structures.h"
@@ -249,7 +250,7 @@ uint64_t milliseconds() {
 }
 
 
-void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode) {
+void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, std::vector<uint8_t> salt_prefix) {
     uint64_t GRID_WORK = ((uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK);
 
     CurvePoint* block_offsets = 0;
@@ -303,9 +304,25 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         status = generate_secure_random_key(base_random_key, max_key, 255);
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     } else if (mode == 2 || mode == 3) {
-        status = generate_secure_random_key(base_random_key, max_key, 256);
+        int prefix_bits = salt_prefix.size() * 8;
+        int random_bits = 256 - prefix_bits;
+
+        if (random_bits < 0) {
+            random_bits = 0;
+        }
+
+        status = generate_secure_random_key(base_random_key, max_key, random_bits);
+
+        // Ensure the random key fits within the remaining bits
+        if (random_bits < 256) {
+            for (int i = 0; i < (random_bits / 32); ++i) {
+                base_random_key.u[i] = base_random_key.u[i + (256 - random_bits) / 32];
+            }
+            for (int i = random_bits / 32; i < 8; ++i) {
+                base_random_key.u[i] = 0;
+            }
+        }
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
-        base_random_key.h &= ~(THREAD_WORK - 1);
     }
 
     if (status) {
@@ -452,8 +469,22 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
     if (mode == 2) {
         while (true) {
+            _uint256 prefix_uint256{0, 0, 0, 0, 0, 0, 0, 0};
+            int prefix_bytes = salt_prefix.size();
+            int prefix_words = (prefix_bytes + 3) / 4;
+            for (int i = 0; i < prefix_words; ++i) {
+                uint32_t word = 0;
+                for (int j = 0; j < 4 && (i * 4 + j) < prefix_bytes; ++j) {
+                    word = (word << 8) | salt_prefix[i * 4 + j];
+                }
+                prefix_uint256.u[7 - i] = word;
+            }
+
+            // Combine prefix and random key
+            _uint256 salt = cpu_or_256(cpu_shift_left_256(prefix_uint256, random_bits), base_random_key);
+
             uint64_t start_time = milliseconds();
-            gpu_contract2_address_work<<<GRID_SIZE, BLOCK_SIZE>>>(score_method, origin_address, random_key, bytecode);
+            gpu_contract2_address_work<<<GRID_SIZE, BLOCK_SIZE>>>(score_method, origin_address, salt, bytecode);
 
             gpu_assert(cudaDeviceSynchronize())
             gpu_assert(cudaMemcpyFromSymbol(device_memory_host, device_memory, (2 + OUTPUT_BUFFER_SIZE * 3) * sizeof(uint64_t)))
@@ -510,7 +541,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                 message_queue_mutex.unlock();
             }
 
-            random_key = cpu_add_256(random_key, random_key_increment);
+            base_random_key = cpu_add_256(base_random_key, random_key_increment);
 
             output_counter_host[0] = 0;
             gpu_assert(cudaMemcpyToSymbol(device_memory, device_memory_host, sizeof(uint64_t)));
@@ -605,7 +636,8 @@ int main(int argc, char *argv[]) {
     char* input_file = 0;
     char* input_address = 0;
     char* input_deployer_address = 0;
-    char* input_bytecode_hash = 0; // Added variable for bytecode hash
+    char* input_bytecode_hash = 0;
+    char* input_salt_prefix = 0; // Added variable for salt prefix
 
     int num_devices = 0;
     int device_ids[10];
@@ -620,7 +652,7 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--zeros") == 0 || strcmp(argv[i], "-z") == 0) {
             score_method = 1;
             i++;
-        } else if (strcmp(argv[i], "--vanity") == 0 || strcmp(argv[i], "-v") == 0) { // Added new option
+        } else if (strcmp(argv[i], "--vanity") == 0 || strcmp(argv[i], "-v") == 0) {
             score_method = 2;
             i++;
         } else if (strcmp(argv[i], "--contract") == 0 || strcmp(argv[i], "-c") == 0) {
@@ -644,6 +676,9 @@ int main(int argc, char *argv[]) {
         } else if  (strcmp(argv[i], "--deployer-address") == 0 || strcmp(argv[i], "-da") == 0) {
             input_deployer_address = argv[i + 1];
             i += 2;
+        } else if (strcmp(argv[i], "--salt-prefix") == 0 || strcmp(argv[i], "-sp") == 0) { // Added new option
+            input_salt_prefix = argv[i + 1];
+            i += 2;
         } else if  (strcmp(argv[i], "--work-scale") == 0 || strcmp(argv[i], "-w") == 0) {
             GRID_SIZE = 1U << atoi(argv[i + 1]);
             i += 2;
@@ -662,7 +697,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (mode == 2 && !input_file && !input_bytecode_hash) { // Adjusted condition
+    if (mode == 2 && !input_file && !input_bytecode_hash) {
         printf("You must specify contract bytecode or bytecode hash when using --contract2\n");
         return 1;
     }
@@ -678,6 +713,37 @@ int main(int argc, char *argv[]) {
     if (mode == 3 && !input_deployer_address) {
         printf("You must specify a deployer address when using --contract3\n");
         return 1;
+    }
+
+    std::vector<uint8_t> salt_prefix_bytes;
+    if (mode == 2 && input_salt_prefix) {
+        // Remove '0x' prefix if present
+        if (strlen(input_salt_prefix) >= 2 && input_salt_prefix[0] == '0' &&
+            (input_salt_prefix[1] == 'x' || input_salt_prefix[1] == 'X')) {
+            input_salt_prefix += 2;
+        }
+
+        int prefix_len = strlen(input_salt_prefix);
+        if (prefix_len % 2 != 0) {
+            printf("Salt prefix must have an even number of hex characters\n");
+            return 1;
+        }
+
+        // Convert hex string to bytes
+        for (int i = 0; i < prefix_len; i += 2) {
+            char byte_str[3] = { input_salt_prefix[i], input_salt_prefix[i + 1], '\0' };
+            if (nothex(byte_str[0]) || nothex(byte_str[1])) {
+                printf("Invalid salt prefix\n");
+                return 1;
+            }
+            uint8_t byte = (uint8_t)strtoul(byte_str, nullptr, 16);
+            salt_prefix_bytes.push_back(byte);
+        }
+
+        if (salt_prefix_bytes.size() > 32) {
+            // Truncate to 32 bytes
+            salt_prefix_bytes.resize(32);
+        }
     }
 
     for (int i = 0; i < num_devices; i++) {
@@ -861,7 +927,7 @@ int main(int argc, char *argv[]) {
     std::vector<std::thread> threads;
     uint64_t global_start_time = milliseconds();
     for (int i = 0; i < num_devices; i++) {
-        std::thread th(host_thread, device_ids[i], i, score_method, mode, origin_address, deployer_address, bytecode_hash);
+        std::thread th(host_thread, device_ids[i], i, score_method, mode, origin_address, deployer_address, bytecode_hash, salt_prefix_bytes);
         threads.push_back(move(th));
     }
 
