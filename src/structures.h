@@ -44,6 +44,29 @@ struct __uint256 {
     uint32_t h;
 };
 
+__host__ __device__ void copy_uint256_to_device(const _uint256& src, __uint256& dst) {
+    dst.a = src.a;
+    dst.b = src.b;
+    dst.c = src.c;
+    dst.d = src.d;
+    dst.e = src.e;
+    dst.f = src.f;
+    dst.g = src.g;
+    dst.h = src.h;
+}
+
+__host__ __device__ void copy_uint256_to_host(const __uint256& src, _uint256& dst) {
+    dst.a = src.a;
+    dst.b = src.b;
+    dst.c = src.c;
+    dst.d = src.d;
+    dst.e = src.e;
+    dst.f = src.f;
+    dst.g = src.g;
+    dst.h = src.h;
+}
+
+
 
 struct _uint256c {
     bool carry;
