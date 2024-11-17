@@ -286,7 +286,7 @@ uint64_t milliseconds() {
     return (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())).count();
 }
 
-bool parse_hex_to_uint256(const char* hex_str, _uint256& result, bool pad_right = false) {
+bool parse_hex_to_uint256(const char* hex_str, _uint256& result, bool pad_right = true) {
     size_t len = strlen(hex_str);
     if (len > 64) {
         return false;
