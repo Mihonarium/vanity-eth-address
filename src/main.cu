@@ -399,6 +399,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     
             // Calculate the total number of random keys processed per iteration
             uint64_t total_work = (uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK;
+            _uint256 uint64_to_uint256(uint64_t value) {
+                return _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(value >> 32), (uint32_t)(value & 0xFFFFFFFF)};
+            }
             random_key_increment = uint64_to_uint256(total_work);
     
             // Mask to extract random bits
@@ -709,9 +712,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         }
     }
 }
-_uint256 uint64_to_uint256(uint64_t value) {
-    return _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(value >> 32), (uint32_t)(value & 0xFFFFFFFF)};
-}
+
 void print_speeds(int num_devices, int* device_ids, double* speeds) {
     double total = 0.0;
     for (int i = 0; i < num_devices; i++) {
