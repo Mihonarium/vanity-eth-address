@@ -329,7 +329,11 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                                 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
     int status;
 
-    int random_bits = 256;
+    int prefix_bits = static_cast<int>(salt_prefix.size()) * 8;
+    int random_bits = 256 - prefix_bits;
+    if (random_bits < 0) {
+        random_bits = 0;
+    }
 
     if (mode == 0 || mode == 1) {
         gpu_assert(cudaMalloc(&block_offsets, GRID_SIZE * sizeof(CurvePoint)))
@@ -354,21 +358,14 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         status = generate_secure_random_key(base_random_key, max_key, 255);
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     } else if (mode == 2 || mode == 3) {
-        int prefix_bits = salt_prefix.size() * 8;
-        random_bits = 256 - prefix_bits;
-
-        if (random_bits < 0) {
-            random_bits = 0;
-        }
 
         status = generate_secure_random_key(base_random_key, max_key, random_bits);
 
-        // Shift base_random_key to fit within the remaining bits
-        if (random_bits < 256) {
-            base_random_key = cpu_shift_left_256(base_random_key, 256 - random_bits);
-        }
-
-        random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
+        uint64_t total_threads = (uint64_t)GRID_SIZE * (uint64_t)BLOCK_SIZE;
+        random_key_increment = uint64_to_uint256(total_threads);
+    
+        // Prepare prefix_uint256
+        _uint256 prefix_uint256 = {0};
     }
 
     if (status) {
@@ -515,34 +512,12 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
     if (mode == 2) {
         while (true) {
-            _uint256 prefix_uint256 = {0};
-            int prefix_bytes = static_cast<int>(salt_prefix.size());
-
-            // Copy salt_prefix bytes into prefix_uint256
-            for (int i = 0; i < prefix_bytes; ++i) {
-                int byte_position = 31 - i; // Big-endian
-                int word_index = byte_position / 4;
-                int byte_in_word = byte_position % 4;
-                uint32_t byte_value = static_cast<uint32_t>(salt_prefix[i]);
-
-                uint32_t shift = (3 - byte_in_word) * 8;
-                switch (word_index) {
-                    case 0: prefix_uint256.a |= byte_value << shift; break;
-                    case 1: prefix_uint256.b |= byte_value << shift; break;
-                    case 2: prefix_uint256.c |= byte_value << shift; break;
-                    case 3: prefix_uint256.d |= byte_value << shift; break;
-                    case 4: prefix_uint256.e |= byte_value << shift; break;
-                    case 5: prefix_uint256.f |= byte_value << shift; break;
-                    case 6: prefix_uint256.g |= byte_value << shift; break;
-                    case 7: prefix_uint256.h |= byte_value << shift; break;
-                }
-            }
-
-            // Combine prefix and random key
-            _uint256 salt = cpu_or_256(prefix_uint256, base_random_key);
-
             uint64_t start_time = milliseconds();
-            gpu_contract2_address_work<<<GRID_SIZE, BLOCK_SIZE>>>(score_method, origin_address, salt, bytecode);
+
+            // Call the GPU kernel with adjusted parameters
+            gpu_contract2_address_work<<<GRID_SIZE, BLOCK_SIZE>>>(
+                score_method, origin_address, prefix_uint256, prefix_bits,
+                base_random_key, bytecode);
 
             gpu_assert(cudaDeviceSynchronize())
             gpu_assert(cudaMemcpyFromSymbol(device_memory_host, device_memory, (2 + OUTPUT_BUFFER_SIZE * 3) * sizeof(uint64_t)))
