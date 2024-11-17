@@ -32,6 +32,8 @@
 #define BLOCK_SIZE 256U
 #define THREAD_WORK (1U << 8)
 
+#define nothex(n) ((n < 48 || n > 57) && (n < 65 || n > 70) && (n < 97 || n > 102))
+
 __constant__ CurvePoint thread_offsets[BLOCK_SIZE];
 __constant__ CurvePoint addends[THREAD_WORK - 1];
 __device__ uint64_t device_memory[2 + OUTPUT_BUFFER_SIZE * 3];
@@ -137,6 +139,76 @@ __device__ int score_vanity(Address a) {
     }
 
     return calculatedScore;
+}
+
+// Shift right by n bits
+_uint256 cpu_shift_right_256(_uint256 x, int n) {
+    if (n == 0) return x;
+    else if (n >= 256) return _uint256{0, 0, 0, 0, 0, 0, 0, 0};
+
+    uint32_t words[8] = {x.a, x.b, x.c, x.d, x.e, x.f, x.g, x.h};
+    uint32_t result_words[8] = {0};
+    int word_shift = n / 32;
+    int bit_shift = n % 32;
+
+    for (int i = word_shift; i < 8; i++) {
+        uint64_t word = words[i];
+        word >>= bit_shift;
+        if (i + 1 < 8 && bit_shift != 0) {
+            word |= ((uint64_t)words[i + 1] << (32 - bit_shift)) & 0xFFFFFFFF;
+        }
+        result_words[i - word_shift] = (uint32_t)word;
+    }
+
+    return _uint256{result_words[0], result_words[1], result_words[2], result_words[3],
+                    result_words[4], result_words[5], result_words[6], result_words[7]};
+}
+
+// Shift left by n bits
+_uint256 cpu_shift_left_256(_uint256 x, int n) {
+    if (n == 0) return x;
+    else if (n >= 256) return _uint256{0, 0, 0, 0, 0, 0, 0, 0};
+
+    uint32_t words[8] = {x.a, x.b, x.c, x.d, x.e, x.f, x.g, x.h};
+    uint32_t result_words[8] = {0};
+    int word_shift = n / 32;
+    int bit_shift = n % 32;
+
+    for (int i = 7 - word_shift; i >= 0; i--) {
+        uint64_t word = words[i];
+        word <<= bit_shift;
+        if (i - 1 >= 0 && bit_shift != 0) {
+            word |= ((uint64_t)words[i - 1] >> (32 - bit_shift)) & 0xFFFFFFFF;
+        }
+        result_words[i + word_shift] = (uint32_t)(word & 0xFFFFFFFF);
+    }
+
+    return _uint256{result_words[0], result_words[1], result_words[2], result_words[3],
+                    result_words[4], result_words[5], result_words[6], result_words[7]};
+}
+
+// Bitwise OR of two _uint256 numbers
+_uint256 cpu_or_256(_uint256 x, _uint256 y) {
+    return _uint256{x.a | y.a, x.b | y.b, x.c | y.c, x.d | y.d,
+                    x.e | y.e, x.f | y.f, x.g | y.g, x.h | y.h};
+}
+
+// Bitwise AND of two _uint256 numbers
+_uint256 cpu_and_256(_uint256 x, _uint256 y) {
+    return _uint256{x.a & y.a, x.b & y.b, x.c & y.c, x.d & y.d,
+                    x.e & y.e, x.f & y.f, x.g & y.g, x.h & y.h};
+}
+
+// Function to check if x >= y
+bool gte_256(_uint256 x, _uint256 y) {
+    if (x.a != y.a) return x.a > y.a;
+    if (x.b != y.b) return x.b > y.b;
+    if (x.c != y.c) return x.c > y.c;
+    if (x.d != y.d) return x.d > y.d;
+    if (x.e != y.e) return x.e > y.e;
+    if (x.f != y.f) return x.f > y.f;
+    if (x.g != y.g) return x.g > y.g;
+    return x.h >= y.h;
 }
 
 #ifdef __linux__
