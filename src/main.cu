@@ -292,19 +292,17 @@ bool parse_hex_to_uint256(const char* hex_str, _uint256& result) {
         return false;
     }
 
-    // Pad with zeros to the right to make it 64 characters
+    // Pad with zeros to the right (least significant bits)
     char padded_hex[65] = {0};
     strcpy(padded_hex, hex_str);
     memset(padded_hex + len, '0', 64 - len);
 
+    // Now parse the padded_hex into the _uint256 result
+    // Note: Adjust parsing according to your system's endianness if necessary
     for (int i = 0; i < 8; i++) {
         char substr[9];
         strncpy(substr, padded_hex + i * 8, 8);
         substr[8] = '\0';
-        if (nothex(substr[0]) || nothex(substr[1]) || nothex(substr[2]) || nothex(substr[3]) ||
-            nothex(substr[4]) || nothex(substr[5]) || nothex(substr[6]) || nothex(substr[7])) {
-            return false;
-        }
         uint32_t value = (uint32_t)strtoul(substr, nullptr, 16);
         switch (i) {
             case 0: result.a = value; break;
