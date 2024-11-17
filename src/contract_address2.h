@@ -107,7 +107,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE, 2) gpu_contract2_address_work(
         else if (score_method == 2) { score = score_vanity(contract_addr); }
 
         // Only process if score is high enough
-        if (score_method != 2 || score >= 90) {
+        if (score_method != 2 || score >= 110) {
             handle_output2(score, contract_addr, salt);
         }
         
