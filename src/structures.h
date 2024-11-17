@@ -17,6 +17,7 @@
 #pragma once
 #include <cinttypes>
 
+
 struct _uint256 {
     uint32_t a;
     uint32_t b;
@@ -26,47 +27,7 @@ struct _uint256 {
     uint32_t f;
     uint32_t g;
     uint32_t h;
-
-    /* Constructor for easy initialization */
-    _uint256(uint32_t a_=0, uint32_t b_=0, uint32_t c_=0, uint32_t d_=0,
-             uint32_t e_=0, uint32_t f_=0, uint32_t g_=0, uint32_t h_=0) :
-        a(a_), b(b_), c(c_), d(d_), e(e_), f(f_), g(g_), h(h_) {}
 };
-
-struct __uint256 {
-    uint32_t a;
-    uint32_t b;
-    uint32_t c;
-    uint32_t d;
-    uint32_t e;
-    uint32_t f;
-    uint32_t g;
-    uint32_t h;
-};
-
-__host__ __device__ void copy_uint256_to_device(const _uint256& src, __uint256& dst) {
-    dst.a = src.a;
-    dst.b = src.b;
-    dst.c = src.c;
-    dst.d = src.d;
-    dst.e = src.e;
-    dst.f = src.f;
-    dst.g = src.g;
-    dst.h = src.h;
-}
-
-__host__ __device__ void copy_uint256_to_host(const __uint256& src, _uint256& dst) {
-    dst.a = src.a;
-    dst.b = src.b;
-    dst.c = src.c;
-    dst.d = src.d;
-    dst.e = src.e;
-    dst.f = src.f;
-    dst.g = src.g;
-    dst.h = src.h;
-}
-
-
 
 struct _uint256c {
     bool carry;
@@ -106,8 +67,8 @@ struct _uint288c {
 };
 
 struct CurvePoint {
-    __uint256 x;
-    __uint256 y;
+    _uint256 x;
+    _uint256 y;
 };
 
 struct Address {
