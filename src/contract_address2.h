@@ -24,6 +24,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE, 2) gpu_contract2_address_work(
     int score_method, Address a, _uint256 base_key, _uint256 bytecode, 
     SaltPrefix salt_prefix) {
     
+    /*
     // Debug output for thread 0 only
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         printf("Debug - Salt prefix length: %d\n", salt_prefix.length_bytes);
@@ -32,6 +33,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE, 2) gpu_contract2_address_work(
                salt_prefix.prefix.d, salt_prefix.prefix.e, salt_prefix.prefix.f,
                salt_prefix.prefix.g, salt_prefix.prefix.h);
     }
+    */
 
     uint64_t thread_id = (uint64_t)threadIdx.x + (uint64_t)blockIdx.x * (uint64_t)BLOCK_SIZE;
     uint64_t key_offset = (uint64_t)THREAD_WORK * thread_id;
