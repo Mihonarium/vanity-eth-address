@@ -327,7 +327,6 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
     _uint256 base_random_key{0, 0, 0, 0, 0, 0, 0, 0};
     _uint256 random_key_increment{0, 0, 0, 0, 0, 0, 0, 0};
-    int status;
     if (mode == 0 || mode == 1) {
         status = generate_secure_random_key(base_random_key, max_key, 255);
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
