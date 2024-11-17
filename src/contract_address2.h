@@ -57,9 +57,10 @@ __global__ void __launch_bounds__(BLOCK_SIZE, 2) gpu_contract2_address_work(
     if (salt_prefix.length_bytes > 0) {
         int remaining_bytes = salt_prefix.length_bytes;
         for (int i = 0; i < 8 && remaining_bytes > 0; i++) {
-            uint32_t* word = &mask.a + i;  // Changed from (7-i) to i
+            uint32_t* word = &mask.a + i;
             int bytes_in_word = min(4, remaining_bytes);
-            *word = 0xFFFFFFFF >> ((4 - bytes_in_word) * 8);
+            // Fill from left to right with 1s for each prefix byte
+            *word = 0xFFFFFFFF << ((4 - bytes_in_word) * 8);
             remaining_bytes -= bytes_in_word;
         }
     }
@@ -87,24 +88,26 @@ __global__ void __launch_bounds__(BLOCK_SIZE, 2) gpu_contract2_address_work(
     for (int i = 0; i < THREAD_WORK; i++) {
         // Combine prefix with random bytes
         _uint256 salt = key;
-        salt.a = (salt.a & ~mask.a) | (salt_prefix.prefix.a & mask.a);
-        salt.b = (salt.b & ~mask.b) | (salt_prefix.prefix.b & mask.b);
-        salt.c = (salt.c & ~mask.c) | (salt_prefix.prefix.c & mask.c);
-        salt.d = (salt.d & ~mask.d) | (salt_prefix.prefix.d & mask.d);
-        salt.e = (salt.e & ~mask.e) | (salt_prefix.prefix.e & mask.e);
-        salt.f = (salt.f & ~mask.f) | (salt_prefix.prefix.f & mask.f);
-        salt.g = (salt.g & ~mask.g) | (salt_prefix.prefix.g & mask.g);
-        salt.h = (salt.h & ~mask.h) | (salt_prefix.prefix.h & mask.h);
+        // For each word, keep prefix bytes from salt_prefix and random bytes from key
+        salt.a = (key.a & ~mask.a) | (salt_prefix.prefix.a & mask.a);
+        salt.b = (key.b & ~mask.b) | (salt_prefix.prefix.b & mask.b);
+        salt.c = (key.c & ~mask.c) | (salt_prefix.prefix.c & mask.c);
+        salt.d = (key.d & ~mask.d) | (salt_prefix.prefix.d & mask.d);
+        salt.e = (key.e & ~mask.e) | (salt_prefix.prefix.e & mask.e);
+        salt.f = (key.f & ~mask.f) | (salt_prefix.prefix.f & mask.f);
+        salt.g = (key.g & ~mask.g) | (salt_prefix.prefix.g & mask.g);
+        salt.h = (key.h & ~mask.h) | (salt_prefix.prefix.h & mask.h);
 
         // Calculate address and score first
         Address contract_addr = calculate_contract_address2(a, salt, bytecode);
+   
         int score = 0;
         if (score_method == 0) { score = score_leading_zeros(contract_addr); }
         else if (score_method == 1) { score = score_zero_bytes(contract_addr); }
         else if (score_method == 2) { score = score_vanity(contract_addr); }
 
         // Only process if score is high enough
-        if (score >= 90) {
+        if (score_method != 2 || score >= 90) {
             handle_output2(score, contract_addr, salt);
         }
         
