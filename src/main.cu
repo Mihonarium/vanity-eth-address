@@ -375,13 +375,13 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
             int prefix_bits = salt_prefix_length;
             int random_bits = 256 - prefix_bits;
     
-            // **Shift the prefix to the higher bits**
+            // Shift the prefix to the higher bits
             salt_prefix = cpu_shift_left_256(salt_prefix, random_bits);
     
             // Generate random bits for the remaining bits
             _uint256 max_random_value = cpu_sub_256(
-                cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits),
-                _uint256{0,0,0,0,0,0,0,1}
+                cpu_shift_left_256(uint32_to_uint256(1), random_bits),
+                uint32_to_uint256(1)
             );
     
             _uint256 random_bits_value;
@@ -397,14 +397,14 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
             // Combine the shifted prefix and random bits
             base_random_key = cpu_or_256(salt_prefix, random_bits_value);
     
-            // Increment for random bits
-            random_key_increment = _uint256{0, 0, 0, 0, 0, 0, 0, 1};
+            // Calculate the total number of random keys processed per iteration
+            uint64_t total_work = (uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK;
+            random_key_increment = uint64_to_uint256(total_work);
     
-            // Mask to ensure random bits stay in their range
+            // Mask to extract random bits
             _uint256 random_bits_mask = cpu_sub_256(
-                cpu_shift_left_256(_uint256{0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
-                                            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF}, random_bits),
-                _uint256{0, 0, 0, 0, 0, 0, 0, 0}
+                cpu_shift_left_256(uint32_to_uint256(1), random_bits),
+                uint32_to_uint256(1)
             );
         } else {
             status = generate_secure_random_key(base_random_key, max_key, 256);
@@ -625,10 +625,16 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
             }
 
             _uint256 random_bits_value = cpu_and_256(random_key, random_bits_mask);
-            random_bits_value = cpu_add_256(random_bits_value, random_key_increment);
-            random_bits_value = cpu_and_256(random_bits_value, random_bits_mask);
 
-            // Combine the prefix and updated random bits
+            // Increment the random bits by random_key_increment
+            random_bits_value = cpu_add_256(random_bits_value, random_key_increment);
+
+            // Ensure the random bits stay within their range (wrap around if necessary)
+            if (gte_256(random_bits_value, max_random_value)) {
+                random_bits_value = cpu_sub_256(random_bits_value, cpu_add_256(max_random_value, uint32_to_uint256(1)));
+            }
+
+            // Combine the shifted prefix and updated random bits
             random_key = cpu_or_256(salt_prefix, random_bits_value);
 
             output_counter_host[0] = 0;
@@ -703,7 +709,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         }
     }
 }
-
+_uint256 uint64_to_uint256(uint64_t value) {
+    return _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(value >> 32), (uint32_t)(value & 0xFFFFFFFF)};
+}
 void print_speeds(int num_devices, int* device_ids, double* speeds) {
     double total = 0.0;
     for (int i = 0; i < num_devices; i++) {
