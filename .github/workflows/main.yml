@@ -22,41 +22,6 @@ jobs:
           draft: true
           prerelease: false
 
-  x86_64_windows:
-    name: "x86_64 Windows"
-    runs-on: [windows-2022]
-    needs: create_release
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          vsversion: 2022
-
-      - name: "Install CUDA"
-        shell: powershell
-        run: |
-          choco install cuda -y
-          $cudaPath = (Get-ChildItem 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\' | Select-Object -Last 1).FullName
-          "$cudaPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: "Build"
-        shell: powershell
-        run: |
-          nvcc src/main.cu -o x86_64_windows.exe -O3 -Xptxas -v -lbcrypt -gencode arch=compute_52,code=compute_52
-
-      - name: 'Upload Release Asset'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_path: ./x86_64_windows.exe
-          asset_name: x86_64_windows.exe
-          asset_content_type: application/octet-stream
-
   x86_64_linux:
     name: "x86_64 Linux"
     runs-on: [ubuntu-22.04]
