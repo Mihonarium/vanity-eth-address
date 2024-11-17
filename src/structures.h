@@ -83,8 +83,8 @@ struct _uint288c {
 };
 
 struct CurvePoint {
-    _uint256 x;
-    _uint256 y;
+    __uint256 x;
+    __uint256 y;
 };
 
 struct Address {
