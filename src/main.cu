@@ -1,5 +1,17 @@
 /*
-    Existing comments and includes
+    Copyright (C) 2023 MrSpike63
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published by
+    the Free Software Foundation, version 3.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #if defined(_WIN64)
@@ -17,8 +29,9 @@
 #include <chrono>
 #include <fstream>
 #include <vector>
-#include <sstream>  // Added for stringstream
-#include <cstring>  // For memset and string manipulation
+
+#include <sstream>
+#include <cstring>
 
 #include "secure_rand.h"
 #include "structures.h"
@@ -27,12 +40,13 @@
 #include "cpu_keccak.h"
 #include "cpu_math.h"
 
+
 #define OUTPUT_BUFFER_SIZE 10000
 
 #define BLOCK_SIZE 256U
 #define THREAD_WORK (1U << 8)
 
-#define nothex(n) ((n < 48 || n > 57) && (n < 65 || n > 70) && (n < 97 || n > 102))
+
 
 __constant__ CurvePoint thread_offsets[BLOCK_SIZE];
 __constant__ CurvePoint addends[THREAD_WORK - 1];
@@ -45,6 +59,72 @@ __device__ int count_zero_bytes(uint32_t x) {
     n += ((x & 0xFF0000) == 0);
     n += ((x & 0xFF000000) == 0);
     return n;
+}
+
+
+__device__ int score_vanity(Address a) {
+    // Convert the address to an array of nibbles
+    uint8_t nibbles[40];
+    uint32_t words[5] = {a.a, a.b, a.c, a.d, a.e};
+    // Extract nibbles from the address
+    #pragma unroll
+    for (int i = 0; i < 5; ++i) {
+        uint32_t word = words[i];
+        for (int j = 0; j < 8; ++j) {
+            nibbles[i * 8 + (7 - j)] = word & 0xF;
+            word >>= 4;
+        }
+    }
+
+    int calculatedScore = 0;
+    int leadingZeroCount = 0;
+    int idx = 0;
+
+    // Count leading zero nibbles
+    while (idx < 40 && nibbles[idx] == 0) {
+        leadingZeroCount++;
+        idx++;
+    }
+
+    // Check if first non-zero nibble is 4 (requirement)
+    if (idx < 40 && nibbles[idx] != 4) {
+        return 0;
+    }
+
+    // Add points for leading zeros
+    calculatedScore += leadingZeroCount * 10;
+
+    // Count consecutive 4s after leading zeros
+    int consecutiveFours = 0;
+    while (idx < 40 && nibbles[idx] == 4) {
+        consecutiveFours++;
+        idx++;
+    }
+
+    // 40 points if exactly 4 consecutive 4s after leading zeros
+    if (consecutiveFours >= 4) {
+        calculatedScore += 40;
+        
+        // 20 points if the first nibble after the four 4s is NOT a 4
+        if (idx < 40 && nibbles[idx] != 4) {
+            calculatedScore += 20;
+        }
+    }
+
+    // Count total 4s in the address (1 point each)
+    for (int i = 0; i < 40; i++) {
+        if (nibbles[i] == 4) {
+            calculatedScore += 1;
+        }
+    }
+
+    // Check if last 4 nibbles are all 4s
+    if (nibbles[36] == 4 && nibbles[37] == 4 && 
+        nibbles[38] == 4 && nibbles[39] == 4) {
+        calculatedScore += 20;
+    }
+
+    return calculatedScore;
 }
 
 __device__ int score_zero_bytes(Address a) {
@@ -78,127 +158,6 @@ __device__ int score_leading_zeros(Address a) {
     return n >> 3;
 }
 
-/* Added new scoring function for vanity addresses */
-__device__ int score_vanity(Address a) {
-    // Convert the address to an array of nibbles
-    uint8_t nibbles[40];
-    uint32_t words[5] = {a.a, a.b, a.c, a.d, a.e};
-
-    // Extract nibbles from the address
-    #pragma unroll
-    for (int i = 0; i < 5; ++i) {
-        uint32_t word = words[i];
-        for (int j = 0; j < 8; ++j) {
-            nibbles[i * 8 + (7 - j)] = word & 0xF;
-            word >>= 4;
-        }
-    }
-
-    int calculatedScore = 0;
-    int leadingZeroCount = 0;
-    int idx = 0;
-
-    // Count leading zero nibbles
-    while (idx < 40 && nibbles[idx] == 0) {
-        leadingZeroCount++;
-        idx++;
-    }
-
-    calculatedScore += leadingZeroCount * 10;
-
-    // Now check the leading fours
-    int leadingFourCount = 0;
-    while (idx < 40 && nibbles[idx] == 4) {
-        leadingFourCount++;
-        idx++;
-    }
-
-    // If the first non-zero nibble is not 4, return 0
-    if (leadingFourCount == 0) {
-        return 0;
-    } else if (leadingFourCount == 4) {
-        // 60 points if exactly 4 4s
-        calculatedScore += 60;
-    } else if (leadingFourCount > 4) {
-        // 40 points if more than 4 4s
-        calculatedScore += 40;
-    }
-
-    // 1 point for every 4 in the address
-    int totalFours = 0;
-    for (int i = 0; i < 40; ++i) {
-        if (nibbles[i] == 4) {
-            totalFours++;
-        }
-    }
-    calculatedScore += totalFours;
-
-    // If the last 4 nibbles are 4s, add 20 points
-    if (nibbles[36] == 4 && nibbles[37] == 4 && nibbles[38] == 4 && nibbles[39] == 4) {
-        calculatedScore += 20;
-    }
-
-    return calculatedScore;
-}
-
-// Shift right by n bits
-_uint256 cpu_shift_right_256(_uint256 x, int n) {
-    if (n == 0) return x;
-    else if (n >= 256) return _uint256{0, 0, 0, 0, 0, 0, 0, 0};
-
-    uint32_t words[8] = {x.a, x.b, x.c, x.d, x.e, x.f, x.g, x.h};
-    uint32_t result_words[8] = {0};
-    int word_shift = n / 32;
-    int bit_shift = n % 32;
-
-    for (int i = word_shift; i < 8; i++) {
-        uint64_t word = words[i];
-        word >>= bit_shift;
-        if (i + 1 < 8 && bit_shift != 0) {
-            word |= ((uint64_t)words[i + 1] << (32 - bit_shift)) & 0xFFFFFFFF;
-        }
-        result_words[i - word_shift] = (uint32_t)word;
-    }
-
-    return _uint256{result_words[0], result_words[1], result_words[2], result_words[3],
-                    result_words[4], result_words[5], result_words[6], result_words[7]};
-}
-
-// Shift left by n bits
-_uint256 cpu_shift_left_256(_uint256 x, int n) {
-    if (n == 0) return x;
-    else if (n >= 256) return _uint256{0, 0, 0, 0, 0, 0, 0, 0};
-
-    uint32_t words[8] = {x.a, x.b, x.c, x.d, x.e, x.f, x.g, x.h};
-    uint32_t result_words[8] = {0};
-    int word_shift = n / 32;
-    int bit_shift = n % 32;
-
-    for (int i = 7 - word_shift; i >= 0; i--) {
-        uint64_t word = words[i];
-        word <<= bit_shift;
-        if (i - 1 >= 0 && bit_shift != 0) {
-            word |= ((uint64_t)words[i - 1] >> (32 - bit_shift)) & 0xFFFFFFFF;
-        }
-        result_words[i + word_shift] = (uint32_t)(word & 0xFFFFFFFF);
-    }
-
-    return _uint256{result_words[0], result_words[1], result_words[2], result_words[3],
-                    result_words[4], result_words[5], result_words[6], result_words[7]};
-}
-
-// Bitwise OR of two _uint256 numbers
-_uint256 cpu_or_256(_uint256 x, _uint256 y) {
-    return _uint256{x.a | y.a, x.b | y.b, x.c | y.c, x.d | y.d,
-                    x.e | y.e, x.f | y.f, x.g | y.g, x.h | y.h};
-}
-
-// Bitwise AND of two _uint256 numbers
-_uint256 cpu_and_256(_uint256 x, _uint256 y) {
-    return _uint256{x.a & y.a, x.b & y.b, x.c & y.c, x.d & y.d,
-                    x.e & y.e, x.f & y.f, x.g & y.g, x.h & y.h};
-}
-
 #ifdef __linux__
     #define atomicMax_ul(a, b) atomicMax((unsigned long long*)(a), (unsigned long long)(b))
     #define atomicAdd_ul(a, b) atomicAdd((unsigned long long*)(a), (unsigned long long)(b))
@@ -226,6 +185,7 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
     }
 }
 
+/* Update handle_output2 function */
 __device__ void handle_output2(int score_method, Address a, uint64_t key) {
     int score = 0;
     if (score_method == 0) { score = score_leading_zeros(a); }
@@ -249,6 +209,7 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
 #include "contract_address2.h"
 #include "contract_address3.h"
 
+
 int global_max_score = 0;
 std::mutex global_max_score_mutex;
 uint32_t GRID_SIZE = 1U << 15;
@@ -269,6 +230,7 @@ struct Message {
 std::queue<Message> message_queue;
 std::mutex message_queue_mutex;
 
+
 #define gpu_assert(call) { \
     cudaError_t e = call; \
     if (e != cudaSuccess) { \
@@ -286,39 +248,8 @@ uint64_t milliseconds() {
     return (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())).count();
 }
 
-bool parse_hex_to_uint256(const char* hex_str, _uint256& result) {
-    size_t len = strlen(hex_str);
-    if (len > 64) {
-        return false;
-    }
 
-    // Pad with zeros to the right (least significant bits)
-    char padded_hex[65] = {0};
-    strcpy(padded_hex, hex_str);
-    memset(padded_hex + len, '0', 64 - len);
-
-    // Now parse the padded_hex into the _uint256 result
-    // Note: Adjust parsing according to your system's endianness if necessary
-    for (int i = 0; i < 8; i++) {
-        char substr[9];
-        strncpy(substr, padded_hex + i * 8, 8);
-        substr[8] = '\0';
-        uint32_t value = (uint32_t)strtoul(substr, nullptr, 16);
-        switch (i) {
-            case 0: result.a = value; break;
-            case 1: result.b = value; break;
-            case 2: result.c = value; break;
-            case 3: result.d = value; break;
-            case 4: result.e = value; break;
-            case 5: result.f = value; break;
-            case 6: result.g = value; break;
-            case 7: result.h = value; break;
-        }
-    }
-    return true;
-}
-
-void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, _uint256 salt_prefix, int salt_prefix_length) {
+void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode) {
     uint64_t GRID_WORK = ((uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK);
 
     CurvePoint* block_offsets = 0;
@@ -346,6 +277,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     gpu_assert(cudaMemcpyToSymbol(device_memory, device_memory_host, 2 * sizeof(uint64_t)));
     gpu_assert(cudaDeviceSynchronize())
 
+
     if (mode == 0 || mode == 1) {
         gpu_assert(cudaMalloc(&block_offsets, GRID_SIZE * sizeof(CurvePoint)))
         gpu_assert(cudaMalloc(&offsets, (uint64_t)GRID_SIZE * BLOCK_SIZE * sizeof(CurvePoint)))
@@ -355,9 +287,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
     _uint256 max_key;
     if (mode == 0 || mode == 1) {
-        _uint256 GRID_WORK_256 = cpu_mul_256_mod_p(cpu_mul_256_mod_p(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, 0, BLOCK_SIZE}), _uint256{0, 0, 0, 0, 0, 0, 0, GRID_SIZE});
+        _uint256 GRID_WORK = cpu_mul_256_mod_p(cpu_mul_256_mod_p(_uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK}, _uint256{0, 0, 0, 0, 0, 0, 0, BLOCK_SIZE}), _uint256{0, 0, 0, 0, 0, 0, 0, GRID_SIZE});
         max_key = _uint256{0x7FFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x5D576E73, 0x57A4501D, 0xDFE92F46, 0x681B20A0};
-        max_key = cpu_sub_256(max_key, GRID_WORK_256);
+        max_key = cpu_sub_256(max_key, GRID_WORK);
         max_key = cpu_sub_256(max_key, _uint256{0, 0, 0, 0, 0, 0, 0, THREAD_WORK});
         max_key = cpu_add_256(max_key, _uint256{0, 0, 0, 0, 0, 0, 0, 2});
     } else if (mode == 2 || mode == 3) {
@@ -371,55 +303,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         status = generate_secure_random_key(base_random_key, max_key, 255);
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     } else if (mode == 2 || mode == 3) {
-        if (salt_prefix_length > 0) {
-            int prefix_bits = salt_prefix_length;
-            int random_bits = 256 - prefix_bits;
-    
-            // Shift the prefix to the higher bits
-            salt_prefix = cpu_shift_left_256(salt_prefix, random_bits);
-    
-            // Generate random bits for the remaining bits
-            _uint256 max_random_value = cpu_sub_256(
-                cpu_shift_left_256(uint32_to_uint256(1), random_bits),
-                uint32_to_uint256(1)
-            );
-    
-            _uint256 random_bits_value;
-            int status = generate_secure_random_key(random_bits_value, max_random_value, random_bits);
-            if (status) {
-                // Handle error
-                message_queue_mutex.lock();
-                message_queue.push(Message{milliseconds(), 10 + status, device_index});
-                message_queue_mutex.unlock();
-                return;
-            }
-    
-            // Combine the shifted prefix and random bits
-            base_random_key = cpu_or_256(salt_prefix, random_bits_value);
-    
-            // Calculate the total number of random keys processed per iteration
-            uint64_t total_work = (uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK;
-            _uint256 uint64_to_uint256(uint64_t value) {
-                return _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(value >> 32), (uint32_t)(value & 0xFFFFFFFF)};
-            }
-            random_key_increment = uint64_to_uint256(total_work);
-    
-            // Mask to extract random bits
-            _uint256 random_bits_mask = cpu_sub_256(
-                cpu_shift_left_256(uint32_to_uint256(1), random_bits),
-                uint32_to_uint256(1)
-            );
-        } else {
-            status = generate_secure_random_key(base_random_key, max_key, 256);
-            if (status) {
-                message_queue_mutex.lock();
-                message_queue.push(Message{milliseconds(), 10 + status});
-                message_queue_mutex.unlock();
-                return;
-            }
-            random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
-            base_random_key.h &= ~(THREAD_WORK - 1);
-        }
+        status = generate_secure_random_key(base_random_key, max_key, 256);
+        random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
+        base_random_key.h &= ~(THREAD_WORK - 1);
     }
 
     if (status) {
@@ -565,9 +451,6 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     }
 
     if (mode == 2) {
-        int random_bits = 256 - salt_prefix_length;
-        _uint256 random_bits_mask = cpu_sub_256(cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits), _uint256{0,0,0,0,0,0,0,1});
-        random_key_increment = _uint256{0, 0, 0, 0, 0, 0, 0, 1};
         while (true) {
             uint64_t start_time = milliseconds();
             gpu_contract2_address_work<<<GRID_SIZE, BLOCK_SIZE>>>(score_method, origin_address, random_key, bytecode);
@@ -607,7 +490,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
                         uint64_t k_offset = output_buffer_host[i];
                         _uint256 k = cpu_add_256(random_key, _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(k_offset >> 32), (uint32_t)(k_offset & 0xFFFFFFFF)});
-                        k = cpu_and_256(k, _uint256{0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF});
+            
                         int idx = valid_results++;
                         results[idx] = k;
                         scores[idx] = output_buffer2_host[i];
@@ -627,18 +510,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                 message_queue_mutex.unlock();
             }
 
-            _uint256 random_bits_value = cpu_and_256(random_key, random_bits_mask);
-
-            // Increment the random bits by random_key_increment
-            random_bits_value = cpu_add_256(random_bits_value, random_key_increment);
-
-            // Ensure the random bits stay within their range (wrap around if necessary)
-            if (gte_256(random_bits_value, max_random_value)) {
-                random_bits_value = cpu_sub_256(random_bits_value, cpu_add_256(max_random_value, uint32_to_uint256(1)));
-            }
-
-            // Combine the shifted prefix and updated random bits
-            random_key = cpu_or_256(salt_prefix, random_bits_value);
+            random_key = cpu_add_256(random_key, random_key_increment);
 
             output_counter_host[0] = 0;
             gpu_assert(cudaMemcpyToSymbol(device_memory, device_memory_host, sizeof(uint64_t)));
@@ -685,7 +557,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
                         uint64_t k_offset = output_buffer_host[i];
                         _uint256 k = cpu_add_256(random_key, _uint256{0, 0, 0, 0, 0, 0, (uint32_t)(k_offset >> 32), (uint32_t)(k_offset & 0xFFFFFFFF)});
-
+            
                         int idx = valid_results++;
                         results[idx] = k;
                         scores[idx] = output_buffer2_host[i];
@@ -713,6 +585,7 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     }
 }
 
+
 void print_speeds(int num_devices, int* device_ids, double* speeds) {
     double total = 0.0;
     for (int i = 0; i < num_devices; i++) {
@@ -725,6 +598,7 @@ void print_speeds(int num_devices, int* device_ids, double* speeds) {
     }
 }
 
+
 int main(int argc, char *argv[]) {
     int score_method = -1; // 0 = leading zeroes, 1 = zeros, 2 = vanity
     int mode = 0; // 0 = address, 1 = contract, 2 = create2 contract, 3 = create3 proxy contract
@@ -732,7 +606,6 @@ int main(int argc, char *argv[]) {
     char* input_address = 0;
     char* input_deployer_address = 0;
     char* input_bytecode_hash = 0; // Added variable for bytecode hash
-    char* input_salt_prefix = 0;   // Added variable for salt prefix
 
     int num_devices = 0;
     int device_ids[10];
@@ -765,9 +638,6 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--bytecode-hash") == 0 || strcmp(argv[i], "-bh") == 0) {
             input_bytecode_hash = argv[i + 1];
             i += 2;
-        } else if (strcmp(argv[i], "--salt-prefix") == 0 || strcmp(argv[i], "-sp") == 0) { // Added new option
-            input_salt_prefix = argv[i + 1];
-            i += 2;
         } else if  (strcmp(argv[i], "--address") == 0 || strcmp(argv[i], "-a") == 0) {
             input_address = argv[i + 1];
             i += 2;
@@ -797,16 +667,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (mode == 2 && input_salt_prefix && strlen(input_salt_prefix) > 66) { // Maximum 32 bytes in hex
-        printf("Salt prefix too long. Maximum length is 64 hex characters (32 bytes).\n");
-        return 1;
-    }
-
     if ((mode == 2 || mode == 3) && !input_address) {
         printf("You must specify an origin address when using --contract2 or --contract3\n");
         return 1;
-    } else if ((mode == 2 || mode == 3) && (strlen(input_address) != 40 && strlen(input_address) != 42)) {
-        printf("The origin address must be 40 or 42 characters long\n");
+    } else if ((mode == 2 || mode == 3) && strlen(input_address) != 40 && strlen(input_address) != 42) {
+        printf("The origin address must be 40 characters long\n");
         return 1;
     }
 
@@ -839,6 +704,34 @@ int main(int argc, char *argv[]) {
                 }
                 input_bytecode_hash += 2;
             }
+
+            // Function to parse hex string to _uint256
+            auto parse_hex_to_uint256 = [](const char* hex_str, _uint256& result) {
+                if (strlen(hex_str) != 64) {
+                    return false;
+                }
+                for (int i = 0; i < 8; i++) {
+                    char substr[9];
+                    strncpy(substr, hex_str + i * 8, 8);
+                    substr[8] = '\0';
+                    if (nothex(substr[0]) || nothex(substr[1]) || nothex(substr[2]) || nothex(substr[3]) ||
+                        nothex(substr[4]) || nothex(substr[5]) || nothex(substr[6]) || nothex(substr[7])) {
+                        return false;
+                    }
+                    uint32_t value = (uint32_t)strtoul(substr, nullptr, 16);
+                    switch (i) {
+                        case 0: result.a = value; break;
+                        case 1: result.b = value; break;
+                        case 2: result.c = value; break;
+                        case 3: result.d = value; break;
+                        case 4: result.e = value; break;
+                        case 5: result.f = value; break;
+                        case 6: result.g = value; break;
+                        case 7: result.h = value; break;
+                    }
+                }
+                return true;
+            };
 
             if (!parse_hex_to_uint256(input_bytecode_hash, bytecode_hash)) {
                 printf("Invalid bytecode hash.\n");
@@ -964,34 +857,11 @@ int main(int argc, char *argv[]) {
     }
     #undef nothex
 
-    // Parse the salt prefix if provided
-    _uint256 salt_prefix = {0};
-    int salt_prefix_length = 0; // In bits
-    if (mode == 2 && input_salt_prefix) {
-        char* hex_str = input_salt_prefix;
-        if (strlen(hex_str) > 66) {
-            printf("Salt prefix too long. Maximum length is 64 hex characters (32 bytes).\n");
-            return 1;
-        }
-        if (strlen(hex_str) >= 2 && hex_str[0] == '0' && (hex_str[1] == 'x' || hex_str[1] == 'X')) {
-            hex_str += 2;
-        }
-        size_t len = strlen(hex_str);
-        if (len > 64) {
-            printf("Salt prefix too long. Maximum length is 64 hex characters (32 bytes).\n");
-            return 1;
-        }
-        salt_prefix_length = len * 4; // Each hex digit represents 4 bits
-        if (!parse_hex_to_uint256(hex_str, salt_prefix)) {
-            printf("Invalid salt prefix.\n");
-            return 1;
-        }
-    }
 
     std::vector<std::thread> threads;
     uint64_t global_start_time = milliseconds();
     for (int i = 0; i < num_devices; i++) {
-        std::thread th(host_thread, device_ids[i], i, score_method, mode, origin_address, deployer_address, bytecode_hash, salt_prefix, salt_prefix_length);
+        std::thread th(host_thread, device_ids[i], i, score_method, mode, origin_address, deployer_address, bytecode_hash);
         threads.push_back(move(th));
     }
 
