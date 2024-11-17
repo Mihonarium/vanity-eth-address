@@ -19,17 +19,14 @@
 
 
 struct _uint256 {
-    union {
-        struct {
-            uint32_t a, b, c, d, e, f, g, h;
-        };
-        uint32_t words[8];
-    };
-
-    /* Constructor for easy initialization */
-    _uint256(uint32_t a_=0, uint32_t b_=0, uint32_t c_=0, uint32_t d_=0,
-             uint32_t e_=0, uint32_t f_=0, uint32_t g_=0, uint32_t h_=0) :
-        a(a_), b(b_), c(c_), d(d_), e(e_), f(f_), g(g_), h(h_) {}
+    uint32_t a;
+    uint32_t b;
+    uint32_t c;
+    uint32_t d;
+    uint32_t e;
+    uint32_t f;
+    uint32_t g;
+    uint32_t h;
 };
 
 struct _uint256c {
