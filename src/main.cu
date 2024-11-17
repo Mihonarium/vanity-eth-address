@@ -325,8 +325,8 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     gpu_assert(cudaMemcpyToSymbol(device_memory, device_memory_host, 2 * sizeof(uint64_t)));
     gpu_assert(cudaDeviceSynchronize())
 
-    _uint256 max_key = _uint256(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
-                                0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
+    _uint256 max_key = _uint256{0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+                                0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
     int status;
 
     int random_bits = 256;
@@ -515,25 +515,26 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
     if (mode == 2) {
         while (true) {
-            _uint256 prefix_uint256 = _uint256(0, 0, 0, 0, 0, 0, 0, 0);
-            int prefix_bytes = salt_prefix.size();
+            _uint256 prefix_uint256 = {0};
+            int prefix_bytes = static_cast<int>(salt_prefix.size());
 
             // Copy salt_prefix bytes into prefix_uint256
             for (int i = 0; i < prefix_bytes; ++i) {
                 int byte_position = 31 - i; // Big-endian
                 int word_index = byte_position / 4;
                 int byte_in_word = byte_position % 4;
-                uint32_t byte_value = salt_prefix[i];
+                uint32_t byte_value = static_cast<uint32_t>(salt_prefix[i]);
 
+                uint32_t shift = (3 - byte_in_word) * 8;
                 switch (word_index) {
-                    case 0: prefix_uint256.a |= byte_value << ((3 - byte_in_word) * 8); break;
-                    case 1: prefix_uint256.b |= byte_value << ((3 - byte_in_word) * 8); break;
-                    case 2: prefix_uint256.c |= byte_value << ((3 - byte_in_word) * 8); break;
-                    case 3: prefix_uint256.d |= byte_value << ((3 - byte_in_word) * 8); break;
-                    case 4: prefix_uint256.e |= byte_value << ((3 - byte_in_word) * 8); break;
-                    case 5: prefix_uint256.f |= byte_value << ((3 - byte_in_word) * 8); break;
-                    case 6: prefix_uint256.g |= byte_value << ((3 - byte_in_word) * 8); break;
-                    case 7: prefix_uint256.h |= byte_value << ((3 - byte_in_word) * 8); break;
+                    case 0: prefix_uint256.a |= byte_value << shift; break;
+                    case 1: prefix_uint256.b |= byte_value << shift; break;
+                    case 2: prefix_uint256.c |= byte_value << shift; break;
+                    case 3: prefix_uint256.d |= byte_value << shift; break;
+                    case 4: prefix_uint256.e |= byte_value << shift; break;
+                    case 5: prefix_uint256.f |= byte_value << shift; break;
+                    case 6: prefix_uint256.g |= byte_value << shift; break;
+                    case 7: prefix_uint256.h |= byte_value << shift; break;
                 }
             }
 
