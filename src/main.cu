@@ -252,27 +252,37 @@ uint64_t milliseconds() {
 
 _uint256 cpu_shift_left_256(_uint256 value, int bits) {
     if (bits == 0) return value;
-    _uint256 result = {0};
-    int words_shift = bits / 32;
-    int bits_shift = bits % 32;
-    for (int i = 7; i >= words_shift; --i) {
-        result.words[i] = value.words[i - words_shift] << bits_shift;
-        if (bits_shift != 0 && (i - words_shift - 1) >= 0) {
-            result.words[i] |= value.words[i - words_shift - 1] >> (32 - bits_shift);
+    if (bits >= 256) return _uint256(0, 0, 0, 0, 0, 0, 0, 0);
+
+    uint32_t parts[8] = {value.a, value.b, value.c, value.d, value.e, value.f, value.g, value.h};
+    uint32_t result_parts[8] = {0};
+
+    int word_shift = bits / 32;
+    int bit_shift = bits % 32;
+
+    for (int i = 0; i < 8 - word_shift; ++i) {
+        result_parts[i] = parts[i + word_shift] << bit_shift;
+        if (bit_shift != 0 && (i + word_shift + 1) < 8) {
+            result_parts[i] |= parts[i + word_shift + 1] >> (32 - bit_shift);
         }
     }
-    return result;
+
+    return _uint256(result_parts[0], result_parts[1], result_parts[2], result_parts[3],
+                    result_parts[4], result_parts[5], result_parts[6], result_parts[7]);
 }
 
-/* Define cpu_or_256 */
 _uint256 cpu_or_256(_uint256 a, _uint256 b) {
-    _uint256 result;
-    for (int i = 0; i < 8; ++i) {
-        result.words[i] = a.words[i] | b.words[i];
-    }
-    return result;
+    return _uint256(
+        a.a | b.a,
+        a.b | b.b,
+        a.c | b.c,
+        a.d | b.d,
+        a.e | b.e,
+        a.f | b.f,
+        a.g | b.g,
+        a.h | b.h
+    );
 }
-
 
 void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, std::vector<uint8_t> salt_prefix) {
     uint64_t GRID_WORK = ((uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK);
@@ -325,13 +335,13 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         max_key = _uint256{0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
     }
 
-    _uint256 base_random_key{0, 0, 0, 0, 0, 0, 0, 0};
-    _uint256 random_key_increment{0, 0, 0, 0, 0, 0, 0, 0};
+    _uint256 base_random_key;
+    _uint256 random_key_increment;
     if (mode == 0 || mode == 1) {
         status = generate_secure_random_key(base_random_key, max_key, 255);
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     } else if (mode == 2 || mode == 3) {
- int prefix_bits = salt_prefix.size() * 8;
+        int prefix_bits = salt_prefix.size() * 8;
         random_bits = 256 - prefix_bits;
 
         if (random_bits < 0) {
@@ -340,21 +350,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
         status = generate_secure_random_key(base_random_key, max_key, random_bits);
 
-        // Ensure the random key fits within the remaining bits
+        // Shift base_random_key to fit within the remaining bits
         if (random_bits < 256) {
-            int shift = (256 - random_bits) / 32;
-            int bits_shift = (256 - random_bits) % 32;
-            for (int i = 0; i < (random_bits + 31) / 32; ++i) {
-                base_random_key.words[i] = base_random_key.words[i + shift];
-                if (bits_shift != 0 && (i + shift + 1) < 8) {
-                    base_random_key.words[i] = (base_random_key.words[i] << bits_shift) | (base_random_key.words[i + shift + 1] >> (32 - bits_shift));
-                } else if (bits_shift != 0) {
-                    base_random_key.words[i] <<= bits_shift;
-                }
-            }
-            for (int i = (random_bits + 31) / 32; i < 8; ++i) {
-                base_random_key.words[i] = 0;
-            }
+            base_random_key = cpu_shift_left_256(base_random_key, 256 - random_bits);
         }
 
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
@@ -504,21 +502,30 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
     if (mode == 2) {
         while (true) {
-            _uint256 prefix_uint256;
+            _uint256 prefix_uint256 = _uint256(0, 0, 0, 0, 0, 0, 0, 0);
             int prefix_bytes = salt_prefix.size();
-            int prefix_words = (prefix_bytes + 3) / 4;
-            memset(prefix_uint256.words, 0, sizeof(prefix_uint256.words));
-            for (int i = 0; i < prefix_words; ++i) {
-                uint32_t word = 0;
-                int bytes_in_word = ((prefix_bytes - i * 4) >= 4) ? 4 : (prefix_bytes - i * 4);
-                for (int j = 0; j < bytes_in_word; ++j) {
-                    word = (word << 8) | salt_prefix[i * 4 + j];
+
+            // Copy salt_prefix bytes into prefix_uint256
+            for (int i = 0; i < prefix_bytes; ++i) {
+                int byte_position = 31 - i; // Big-endian
+                int word_index = byte_position / 4;
+                int byte_in_word = byte_position % 4;
+                uint32_t byte_value = salt_prefix[i];
+
+                switch (word_index) {
+                    case 0: prefix_uint256.a |= byte_value << ((3 - byte_in_word) * 8); break;
+                    case 1: prefix_uint256.b |= byte_value << ((3 - byte_in_word) * 8); break;
+                    case 2: prefix_uint256.c |= byte_value << ((3 - byte_in_word) * 8); break;
+                    case 3: prefix_uint256.d |= byte_value << ((3 - byte_in_word) * 8); break;
+                    case 4: prefix_uint256.e |= byte_value << ((3 - byte_in_word) * 8); break;
+                    case 5: prefix_uint256.f |= byte_value << ((3 - byte_in_word) * 8); break;
+                    case 6: prefix_uint256.g |= byte_value << ((3 - byte_in_word) * 8); break;
+                    case 7: prefix_uint256.h |= byte_value << ((3 - byte_in_word) * 8); break;
                 }
-                prefix_uint256.words[7 - i] = word;
             }
 
             // Combine prefix and random key
-            _uint256 salt = cpu_or_256(cpu_shift_left_256(prefix_uint256, random_bits), base_random_key);
+            _uint256 salt = cpu_or_256(prefix_uint256, base_random_key);
 
             uint64_t start_time = milliseconds();
             gpu_contract2_address_work<<<GRID_SIZE, BLOCK_SIZE>>>(score_method, origin_address, salt, bytecode);
