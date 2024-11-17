@@ -286,22 +286,16 @@ uint64_t milliseconds() {
     return (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())).count();
 }
 
-bool parse_hex_to_uint256(const char* hex_str, _uint256& result, bool pad_right = true) {
+bool parse_hex_to_uint256(const char* hex_str, _uint256& result) {
     size_t len = strlen(hex_str);
     if (len > 64) {
         return false;
     }
 
+    // Pad with zeros to the right to make it 64 characters
     char padded_hex[65] = {0};
-    if (pad_right) {
-        // Pad with zeros to the right
-        strcpy(padded_hex, hex_str);
-        memset(padded_hex + len, '0', 64 - len);
-    } else {
-        // Pad with zeros to the left
-        memset(padded_hex, '0', 64 - len);
-        memcpy(padded_hex + 64 - len, hex_str, len);
-    }
+    strcpy(padded_hex, hex_str);
+    memset(padded_hex + len, '0', 64 - len);
 
     for (int i = 0; i < 8; i++) {
         char substr[9];
@@ -382,18 +376,29 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         if (salt_prefix_length > 0) {
             // Adjust max_key based on the number of bits remaining after the prefix
             int random_bits = 256 - salt_prefix_length;
-            _uint256 max_random_part = cpu_sub_256(cpu_shift_left_256(_uint256{0, 0, 0, 0, 0, 0, 0, 1}, random_bits), _uint256{0, 0, 0, 0, 0, 0, 0, 1});
     
-            status = generate_secure_random_key(base_random_key, max_random_part, random_bits);
+            // Generate random bits for the remaining bits
+            _uint256 max_random_value = cpu_sub_256(cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits), _uint256{0,0,0,0,0,0,0,1});
+            _uint256 random_bits_value;
+    
+            // Generate random bits (or set to zero if random bits are not required)
+            int status = generate_secure_random_key(random_bits_value, max_random_value, random_bits);
             if (status) {
                 message_queue_mutex.lock();
                 message_queue.push(Message{milliseconds(), 10 + status});
                 message_queue_mutex.unlock();
                 return;
             }
+    
+            // Shift random bits to the correct position (they are in lower bits, so no shift needed)
             // Combine the prefix and random bits
-            base_random_key = cpu_or_256(cpu_shift_left_256(salt_prefix, random_bits), base_random_key);
-            random_key_increment = uint32_to_uint256(GRID_SIZE * BLOCK_SIZE * THREAD_WORK);
+            base_random_key = cpu_or_256(cpu_shift_left_256(salt_prefix, random_bits), random_bits_value);
+    
+            // Set the increment for the random bits
+            random_key_increment = _uint256{0, 0, 0, 0, 0, 0, 0, 1}; // Increment the random bits by 1 each iteration
+    
+            // Mask to keep the random bits within the correct range
+            _uint256 random_bits_mask = cpu_sub_256(cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits), _uint256{0,0,0,0,0,0,0,1});
         } else {
             status = generate_secure_random_key(base_random_key, max_key, 256);
             if (status) {
@@ -550,6 +555,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     }
 
     if (mode == 2) {
+        int random_bits = 256 - salt_prefix_length;
+        _uint256 random_bits_mask = cpu_sub_256(cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits), _uint256{0,0,0,0,0,0,0,1});
+        random_key_increment = _uint256{0, 0, 0, 0, 0, 0, 0, 1};
         while (true) {
             uint64_t start_time = milliseconds();
             gpu_contract2_address_work<<<GRID_SIZE, BLOCK_SIZE>>>(score_method, origin_address, random_key, bytecode);
@@ -609,13 +617,13 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                 message_queue_mutex.unlock();
             }
 
-            random_key = cpu_add_256(random_key, random_key_increment);
-            if (salt_prefix_length > 0) {
-                // Mask the random key to ensure the prefix remains
-                _uint256 mask = cpu_sub_256(cpu_shift_left_256(_uint256{0, 0, 0, 0, 0, 0, 0, 1}, 256 - salt_prefix_length), _uint256{0, 0, 0, 0, 0, 0, 0, 1});
-                random_key = cpu_and_256(random_key, mask);
-                random_key = cpu_or_256(random_key, salt_prefix);
-            }
+            _uint256 random_bits_value = cpu_and_256(random_key, random_bits_mask);
+            random_bits_value = cpu_add_256(random_bits_value, random_key_increment);
+            random_bits_value = cpu_and_256(random_bits_value, random_bits_mask);
+
+            // Combine the prefix and updated random bits
+            random_key = cpu_or_256(cpu_shift_left_256(salt_prefix, 256 - salt_prefix_length), random_bits_value);
+
 
             output_counter_host[0] = 0;
             gpu_assert(cudaMemcpyToSymbol(device_memory, device_memory_host, sizeof(uint64_t)));
@@ -959,12 +967,11 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         salt_prefix_length = len * 4; // Each hex digit represents 4 bits
-        if (!parse_hex_to_uint256(hex_str, salt_prefix, true)) { // Pad zeros to the right
+        if (!parse_hex_to_uint256(hex_str, salt_prefix)) {
             printf("Invalid salt prefix.\n");
             return 1;
         }
     }
-
 
     std::vector<std::thread> threads;
     uint64_t global_start_time = milliseconds();
