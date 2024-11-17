@@ -371,7 +371,8 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         status = generate_secure_random_key(base_random_key, max_key, 255);
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     } else if (mode == 2 || mode == 3) {
-            if (salt_prefix_length > 0) {        int prefix_bits = salt_prefix_length;
+        if (salt_prefix_length > 0) {
+            int prefix_bits = salt_prefix_length;
             int random_bits = 256 - prefix_bits;
     
             // **Shift the prefix to the higher bits**
@@ -413,9 +414,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
                 message_queue_mutex.unlock();
                 return;
             }
+            random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
+            base_random_key.h &= ~(THREAD_WORK - 1);
         }
-        random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
-        base_random_key.h &= ~(THREAD_WORK - 1);
     }
 
     if (status) {
