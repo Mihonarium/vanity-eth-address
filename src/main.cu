@@ -286,40 +286,31 @@ uint64_t milliseconds() {
     return (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())).count();
 }
 
-bool parse_hex_to_uint256(const char* hex_str, _uint256& result) {
+bool parse_hex_to_uint256(const char* hex_str, _uint256& result, bool pad_right = false) {
     size_t len = strlen(hex_str);
     if (len > 64) {
         return false;
     }
 
-    // Initialize result to zero
-    result = _uint256{0, 0, 0, 0, 0, 0, 0, 0};
+    char padded_hex[65] = {0};
+    if (pad_right) {
+        // Pad with zeros to the right
+        strcpy(padded_hex, hex_str);
+        memset(padded_hex + len, '0', 64 - len);
+    } else {
+        // Pad with zeros to the left
+        memset(padded_hex, '0', 64 - len);
+        memcpy(padded_hex + 64 - len, hex_str, len);
+    }
 
-    // Process the hex string from right to left (least significant digits)
-    int total_words = (len + 7) / 8; // Number of 32-bit words
-    int start = (int)len - 8;        // Starting index for substrings
-
-    for (int i = 7; i >= 0; i--) {
-        char substr[9] = {0};
-        if (start >= 0) {
-            strncpy(substr, hex_str + start, 8);
-        } else if (start > -8) {
-            strncpy(substr, hex_str, start + 8);
-        } else {
-            // No more characters left to process
-            break;
-        }
-
-        // Ensure substrings are null-terminated
+    for (int i = 0; i < 8; i++) {
+        char substr[9];
+        strncpy(substr, padded_hex + i * 8, 8);
         substr[8] = '\0';
-
-        // Check for invalid characters
-        for (int j = 0; j < strlen(substr); j++) {
-            if (nothex(substr[j])) {
-                return false;
-            }
+        if (nothex(substr[0]) || nothex(substr[1]) || nothex(substr[2]) || nothex(substr[3]) ||
+            nothex(substr[4]) || nothex(substr[5]) || nothex(substr[6]) || nothex(substr[7])) {
+            return false;
         }
-
         uint32_t value = (uint32_t)strtoul(substr, nullptr, 16);
         switch (i) {
             case 0: result.a = value; break;
@@ -331,12 +322,9 @@ bool parse_hex_to_uint256(const char* hex_str, _uint256& result) {
             case 6: result.g = value; break;
             case 7: result.h = value; break;
         }
-
-        start -= 8;
     }
     return true;
 }
-
 
 void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, _uint256 salt_prefix, int salt_prefix_length) {
     uint64_t GRID_WORK = ((uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK);
@@ -392,19 +380,20 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     } else if (mode == 2 || mode == 3) {
         if (salt_prefix_length > 0) {
-            // Adjust max_key based on salt prefix length
-            _uint256 max_random_part = _uint256{0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
-                                                0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
-            max_random_part = cpu_shift_right_256(max_random_part, salt_prefix_length);
-            status = generate_secure_random_key(base_random_key, max_random_part, 256 - salt_prefix_length);
+            // Adjust max_key based on the number of bits remaining after the prefix
+            int random_bits = 256 - salt_prefix_length;
+            _uint256 max_random_part = cpu_sub_256(cpu_shift_left_256(_uint256{0, 0, 0, 0, 0, 0, 0, 1}, random_bits), _uint256{0, 0, 0, 0, 0, 0, 0, 1});
+    
+            status = generate_secure_random_key(base_random_key, max_random_part, random_bits);
             if (status) {
                 message_queue_mutex.lock();
                 message_queue.push(Message{milliseconds(), 10 + status});
                 message_queue_mutex.unlock();
                 return;
             }
-            base_random_key = cpu_shift_left_256(base_random_key, salt_prefix_length);
-            base_random_key = cpu_or_256(base_random_key, salt_prefix);
+            // Combine the prefix and random bits
+            base_random_key = cpu_or_256(cpu_shift_left_256(salt_prefix, random_bits), base_random_key);
+            random_key_increment = uint32_to_uint256(GRID_SIZE * BLOCK_SIZE * THREAD_WORK);
         } else {
             status = generate_secure_random_key(base_random_key, max_key, 256);
             if (status) {
@@ -622,8 +611,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
 
             random_key = cpu_add_256(random_key, random_key_increment);
             if (salt_prefix_length > 0) {
-                random_key = cpu_and_256(random_key, cpu_shift_left_256(_uint256{0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
-                                                      0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF}, salt_prefix_length));
+                // Mask the random key to ensure the prefix remains
+                _uint256 mask = cpu_sub_256(cpu_shift_left_256(_uint256{0, 0, 0, 0, 0, 0, 0, 1}, 256 - salt_prefix_length), _uint256{0, 0, 0, 0, 0, 0, 0, 1});
+                random_key = cpu_and_256(random_key, mask);
                 random_key = cpu_or_256(random_key, salt_prefix);
             }
 
@@ -955,25 +945,26 @@ int main(int argc, char *argv[]) {
     _uint256 salt_prefix = {0};
     int salt_prefix_length = 0; // In bits
     if (mode == 2 && input_salt_prefix) {
-        const char* hex_str = input_salt_prefix;
+        char* hex_str = input_salt_prefix;
         if (strlen(hex_str) > 66) {
             printf("Salt prefix too long. Maximum length is 64 hex characters (32 bytes).\n");
             return 1;
         }
-        if (strlen(hex_str) == 66) {
-            if (hex_str[0] != '0' || (hex_str[1] != 'x' && hex_str[1] != 'X')) {
-                printf("Invalid salt prefix\n");
-                return 1;
-            }
+        if (strlen(hex_str) >= 2 && hex_str[0] == '0' && (hex_str[1] == 'x' || hex_str[1] == 'X')) {
             hex_str += 2;
         }
         size_t len = strlen(hex_str);
+        if (len > 64) {
+            printf("Salt prefix too long. Maximum length is 64 hex characters (32 bytes).\n");
+            return 1;
+        }
         salt_prefix_length = len * 4; // Each hex digit represents 4 bits
-        if (!parse_hex_to_uint256(hex_str, salt_prefix)) {
+        if (!parse_hex_to_uint256(hex_str, salt_prefix, true)) { // Pad zeros to the right
             printf("Invalid salt prefix.\n");
             return 1;
         }
     }
+
 
     std::vector<std::thread> threads;
     uint64_t global_start_time = milliseconds();
