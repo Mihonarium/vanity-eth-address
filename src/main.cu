@@ -286,26 +286,40 @@ uint64_t milliseconds() {
     return (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())).count();
 }
 
-/* Function to parse hex string to _uint256 */
 bool parse_hex_to_uint256(const char* hex_str, _uint256& result) {
     size_t len = strlen(hex_str);
     if (len > 64) {
         return false;
     }
 
-    // Pad the hex string with leading zeros if necessary
-    char padded_hex[65] = {0};
-    memset(padded_hex, '0', 64 - len);
-    memcpy(padded_hex + 64 - len, hex_str, len);
+    // Initialize result to zero
+    result = _uint256{0, 0, 0, 0, 0, 0, 0, 0};
 
-    for (int i = 0; i < 8; i++) {
-        char substr[9];
-        strncpy(substr, padded_hex + i * 8, 8);
-        substr[8] = '\0';
-        if (nothex(substr[0]) || nothex(substr[1]) || nothex(substr[2]) || nothex(substr[3]) ||
-            nothex(substr[4]) || nothex(substr[5]) || nothex(substr[6]) || nothex(substr[7])) {
-            return false;
+    // Process the hex string from right to left (least significant digits)
+    int total_words = (len + 7) / 8; // Number of 32-bit words
+    int start = (int)len - 8;        // Starting index for substrings
+
+    for (int i = 7; i >= 0; i--) {
+        char substr[9] = {0};
+        if (start >= 0) {
+            strncpy(substr, hex_str + start, 8);
+        } else if (start > -8) {
+            strncpy(substr, hex_str, start + 8);
+        } else {
+            // No more characters left to process
+            break;
         }
+
+        // Ensure substrings are null-terminated
+        substr[8] = '\0';
+
+        // Check for invalid characters
+        for (int j = 0; j < strlen(substr); j++) {
+            if (nothex(substr[j])) {
+                return false;
+            }
+        }
+
         uint32_t value = (uint32_t)strtoul(substr, nullptr, 16);
         switch (i) {
             case 0: result.a = value; break;
@@ -317,9 +331,12 @@ bool parse_hex_to_uint256(const char* hex_str, _uint256& result) {
             case 6: result.g = value; break;
             case 7: result.h = value; break;
         }
+
+        start -= 8;
     }
     return true;
 }
+
 
 void host_thread(int device, int device_index, int score_method, int mode, Address origin_address, Address deployer_address, _uint256 bytecode, _uint256 salt_prefix, int salt_prefix_length) {
     uint64_t GRID_WORK = ((uint64_t)BLOCK_SIZE * (uint64_t)GRID_SIZE * (uint64_t)THREAD_WORK);
