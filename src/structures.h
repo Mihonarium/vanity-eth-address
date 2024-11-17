@@ -33,6 +33,17 @@ struct _uint256 {
         a(a_), b(b_), c(c_), d(d_), e(e_), f(f_), g(g_), h(h_) {}
 };
 
+struct __uint256 {
+    uint32_t a;
+    uint32_t b;
+    uint32_t c;
+    uint32_t d;
+    uint32_t e;
+    uint32_t f;
+    uint32_t g;
+    uint32_t h;
+};
+
 
 struct _uint256c {
     bool carry;
