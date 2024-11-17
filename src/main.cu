@@ -61,11 +61,11 @@ __device__ int count_zero_bytes(uint32_t x) {
     return n;
 }
 
+
 __device__ int score_vanity(Address a) {
     // Convert the address to an array of nibbles
     uint8_t nibbles[40];
     uint32_t words[5] = {a.a, a.b, a.c, a.d, a.e};
-
     // Extract nibbles from the address
     #pragma unroll
     for (int i = 0; i < 5; ++i) {
@@ -86,42 +86,41 @@ __device__ int score_vanity(Address a) {
         idx++;
     }
 
+    // Check if first non-zero nibble is 4 (requirement)
+    if (idx < 40 && nibbles[idx] != 4) {
+        return 0;
+    }
+
+    // Add points for leading zeros
     calculatedScore += leadingZeroCount * 10;
 
-    // Now check the leading fours
-    int leadingFourCount = 0;
+    // Count consecutive 4s after leading zeros
+    int consecutiveFours = 0;
     while (idx < 40 && nibbles[idx] == 4) {
-        leadingFourCount++;
+        consecutiveFours++;
         idx++;
     }
 
-    // If the first non-zero nibble is not 4, return 0
-    if (leadingFourCount == 0) {
-        return 0;
-    } else if (leadingFourCount == 4) {
-        // 60 points if exactly 4 4s
-        calculatedScore += 60;
-    } else if (leadingFourCount > 4) {
-        // 40 points if more than 4 4s
+    // 40 points if exactly 4 consecutive 4s after leading zeros
+    if (consecutiveFours >= 4) {
         calculatedScore += 40;
-    }
-
-    // 20 points if the first nibble after the four 4s is NOT a 4
-    if (leadingFourCount >= 4 && idx < 40 && nibbles[idx] != 4) {
-        calculatedScore += 20;
-    }
-
-    // 1 point for every 4 in the address
-    int totalFours = 0;
-    for (int i = 0; i < 40; ++i) {
-        if (nibbles[i] == 4) {
-            totalFours++;
+        
+        // 20 points if the first nibble after the four 4s is NOT a 4
+        if (idx < 40 && nibbles[idx] != 4) {
+            calculatedScore += 20;
         }
     }
-    calculatedScore += totalFours;
 
-    // If the last 4 nibbles are 4s, add 20 points
-    if (nibbles[36] == 4 && nibbles[37] == 4 && nibbles[38] == 4 && nibbles[39] == 4) {
+    // Count total 4s in the address (1 point each)
+    for (int i = 0; i < 40; i++) {
+        if (nibbles[i] == 4) {
+            calculatedScore += 1;
+        }
+    }
+
+    // Check if last 4 nibbles are all 4s
+    if (nibbles[36] == 4 && nibbles[37] == 4 && 
+        nibbles[38] == 4 && nibbles[39] == 4) {
         calculatedScore += 20;
     }
 
