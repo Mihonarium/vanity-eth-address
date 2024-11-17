@@ -39,7 +39,7 @@ __global__ void __launch_bounds__(BLOCK_SIZE, 2) gpu_contract3_address_work(int 
     for (int i = 0; i < THREAD_WORK; i++) {
         _uint256 salt = calculate_create3_salt(origin, key);
         Address proxy = calculate_contract_address2(deployer, salt, proxy_bytecode);
-        handle_output2(score_method, calculate_contract_address(proxy, 1), key_offset + i);
+        handle_output3(score_method, calculate_contract_address(proxy, 1), key_offset + i);
         key.h += 1;
     }
 }
