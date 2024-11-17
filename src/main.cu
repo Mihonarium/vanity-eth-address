@@ -186,8 +186,7 @@ __device__ void handle_output(int score_method, Address a, uint64_t key, bool in
     }
 }
 
-/* Update handle_output2 function */
-__device__ void handle_output2(int score_method, Address a, uint64_t key) {
+__device__ void handle_output2(int score_method, Address a, _uint256 salt) {
     int score = 0;
     if (score_method == 0) { score = score_leading_zeros(a); }
     else if (score_method == 1) { score = score_zero_bytes(a); }
@@ -198,12 +197,31 @@ __device__ void handle_output2(int score_method, Address a, uint64_t key) {
         if (score >= device_memory[1]) {
             uint32_t idx = atomicAdd_ul(&device_memory[0], 1);
             if (idx < OUTPUT_BUFFER_SIZE) {
-                device_memory[2 + idx] = key;
-                device_memory[OUTPUT_BUFFER_SIZE + 2 + idx] = score;
+                // Store the salt in the output buffer
+                uint32_t salt_index = 2 + idx * 14;
+                device_memory[salt_index + 0] = salt.a;
+                device_memory[salt_index + 1] = salt.b;
+                device_memory[salt_index + 2] = salt.c;
+                device_memory[salt_index + 3] = salt.d;
+                device_memory[salt_index + 4] = salt.e;
+                device_memory[salt_index + 5] = salt.f;
+                device_memory[salt_index + 6] = salt.g;
+                device_memory[salt_index + 7] = salt.h;
+
+                // Store the address components
+                device_memory[salt_index + 8] = a.a;
+                device_memory[salt_index + 9] = a.b;
+                device_memory[salt_index + 10] = a.c;
+                device_memory[salt_index + 11] = a.d;
+                device_memory[salt_index + 12] = a.e;
+
+                // Store the score
+                device_memory[salt_index + 13] = score;
             }
         }
     }
 }
+
 
 #include "address.h"
 #include "contract_address.h"
