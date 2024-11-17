@@ -29,6 +29,7 @@
 #include <chrono>
 #include <fstream>
 #include <vector>
+#include <sstream>
 
 #include "secure_rand.h"
 #include "structures.h"
@@ -533,6 +534,7 @@ int main(int argc, char *argv[]) {
     char* input_file = 0;
     char* input_address = 0;
     char* input_deployer_address = 0;
+    char* input_bytecode_hash = 0; // Added variable for bytecode hash
 
     int num_devices = 0;
     int device_ids[10];
@@ -559,6 +561,9 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--bytecode") == 0 || strcmp(argv[i], "-b") == 0) {
             input_file = argv[i + 1];
             i += 2;
+        } else if (strcmp(argv[i], "--bytecode-hash") == 0 || strcmp(argv[i], "-bh") == 0) { // Added new option
+            input_bytecode_hash = argv[i + 1];
+            i += 2;
         } else if  (strcmp(argv[i], "--address") == 0 || strcmp(argv[i], "-a") == 0) {
             input_address = argv[i + 1];
             i += 2;
@@ -583,8 +588,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (mode == 2 && !input_file) {
-        printf("You must specify contract bytecode when using --contract2\n");
+    if (mode == 2 && !input_file && !input_bytecode_hash) { // Adjusted condition
+        printf("You must specify contract bytecode or bytecode hash when using --contract2\n");
         return 1;
     }
 
@@ -596,12 +601,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if ((mode == 2 || mode == 3) && !input_deployer_address) {
+    if (mode == 3 && !input_deployer_address) { // Adjusted condition
         printf("You must specify a deployer address when using --contract3\n");
         return 1;
     }
-
-
 
     for (int i = 0; i < num_devices; i++) {
         cudaError_t e = cudaSetDevice(device_ids[i]);
@@ -614,71 +617,131 @@ int main(int argc, char *argv[]) {
     #define nothex(n) ((n < 48 || n > 57) && (n < 65 || n > 70) && (n < 97 || n > 102))
     _uint256 bytecode_hash;
     if (mode == 2 || mode == 3) {
-        std::ifstream infile(input_file, std::ios::binary);
-        if (!infile.is_open()) {
-            printf("Failed to open the bytecode file.\n");
-            return 1;
-        }
-        
-        int file_size = 0;
-        {
-            infile.seekg(0, std::ios::end);
-            std::streampos file_size_ = infile.tellg();
-            infile.seekg(0, std::ios::beg);
-            file_size = file_size_ - infile.tellg();
-        }
+        if (input_bytecode_hash) {
+            // Parse the bytecode hash from the command line
+            if (strlen(input_bytecode_hash) != 64 && strlen(input_bytecode_hash) != 66) {
+                printf("The bytecode hash must be 64 characters long\n");
+                return 1;
+            }
+            if (strlen(input_bytecode_hash) == 66) {
+                if (input_bytecode_hash[0] != '0' || (input_bytecode_hash[1] != 'x' && input_bytecode_hash[1] != 'X')) {
+                    printf("Invalid bytecode hash prefix\n");
+                    return 1;
+                }
+                input_bytecode_hash += 2;
+            }
 
-        if (file_size & 1) {
-            printf("Invalid bytecode in file.\n");
-            return 1;
-        }
+            // Function to parse hex string to _uint256
+            auto parse_hex_to_uint256 = [](const char* hex_str, _uint256& result) {
+                if (strlen(hex_str) != 64) {
+                    return false;
+                }
+                for (int i = 0; i < 8; i++) {
+                    char substr[9];
+                    strncpy(substr, hex_str + i * 8, 8);
+                    substr[8] = '\0';
+                    if (nothex(substr[0]) || nothex(substr[1]) || nothex(substr[2]) || nothex(substr[3]) ||
+                        nothex(substr[4]) || nothex(substr[5]) || nothex(substr[6]) || nothex(substr[7])) {
+                        return false;
+                    }
+                    uint32_t value = (uint32_t)strtoul(substr, nullptr, 16);
+                    switch (i) {
+                        case 0: result.a = value; break;
+                        case 1: result.b = value; break;
+                        case 2: result.c = value; break;
+                        case 3: result.d = value; break;
+                        case 4: result.e = value; break;
+                        case 5: result.f = value; break;
+                        case 6: result.g = value; break;
+                        case 7: result.h = value; break;
+                    }
+                }
+                return true;
+            };
 
-        uint8_t* bytecode = new uint8_t[24576];
-        if (bytecode == 0) {
-            printf("Error while allocating memory. Perhaps you are out of memory?");
-            return 1;
-        }
+            if (!parse_hex_to_uint256(input_bytecode_hash, bytecode_hash)) {
+                printf("Invalid bytecode hash.\n");
+                return 1;
+            }
 
-        char byte[2];
-        bool prefix = false;
-        for (int i = 0; i < (file_size >> 1); i++) {
-            infile.read((char*)&byte, 2);
-            if (i == 0) {
-                prefix = byte[0] == '0' && byte[1] == 'x';
-                if ((file_size >> 1) > (prefix ? 24577 : 24576)) {
+        } else {
+            if (!input_file) {
+                printf("You must specify contract bytecode or bytecode hash when using --contract2\n");
+                return 1;
+            }
+            // Existing code to read bytecode from file and compute hash
+            std::ifstream infile(input_file, std::ios::binary);
+            if (!infile.is_open()) {
+                printf("Failed to open the bytecode file.\n");
+                return 1;
+            }
+
+            int file_size = 0;
+            {
+                infile.seekg(0, std::ios::end);
+                std::streampos file_size_ = infile.tellg();
+                infile.seekg(0, std::ios::beg);
+                file_size = file_size_ - infile.tellg();
+            }
+
+            if (file_size & 1) {
+                printf("Invalid bytecode in file.\n");
+                return 1;
+            }
+
+            uint8_t* bytecode = new uint8_t[24576];
+            if (bytecode == 0) {
+                printf("Error while allocating memory. Perhaps you are out of memory?");
+                return 1;
+            }
+
+            char byte[2];
+            bool prefix = false;
+            for (int i = 0; i < (file_size >> 1); i++) {
+                infile.read((char*)&byte, 2);
+                if (i == 0) {
+                    prefix = byte[0] == '0' && byte[1] == 'x';
+                    if ((file_size >> 1) > (prefix ? 24577 : 24576)) {
+                        printf("Invalid bytecode in file.\n");
+                        delete[] bytecode;
+                        return 1;
+                    }
+                    if (prefix) { continue; }
+                }
+
+                if (nothex(byte[0]) || nothex(byte[1])) {
                     printf("Invalid bytecode in file.\n");
                     delete[] bytecode;
                     return 1;
                 }
-                if (prefix) { continue; }
-            }
 
-            if (nothex(byte[0]) || nothex(byte[1])) {
-                printf("Invalid bytecode in file.\n");
-                delete[] bytecode;
-                return 1;
-            }
-
-            bytecode[i - prefix] = (uint8_t)strtol(byte, 0, 16);
-        }    
-        bytecode_hash = cpu_full_keccak(bytecode, (file_size >> 1) - prefix);
-        delete[] bytecode;
+                bytecode[i - prefix] = (uint8_t)strtol(byte, 0, 16);
+            }    
+            bytecode_hash = cpu_full_keccak(bytecode, (file_size >> 1) - prefix);
+            delete[] bytecode;
+        }
     }
 
     Address origin_address;
     if (mode == 2 || mode == 3) {
         if (strlen(input_address) == 42) {
+            if (input_address[0] != '0' || (input_address[1] != 'x' && input_address[1] != 'X')) {
+                printf("Invalid origin address prefix\n");
+                return 1;
+            }
             input_address += 2;
         }
         char substr[9];
 
         #define round(i, offset) \
         strncpy(substr, input_address + offset * 8, 8); \
-        if (nothex(substr[0]) || nothex(substr[1]) || nothex(substr[2]) || nothex(substr[3]) || nothex(substr[4]) || nothex(substr[5]) || nothex(substr[6]) || nothex(substr[7])) { \
+        substr[8] = '\0'; \
+        if (nothex(substr[0]) || nothex(substr[1]) || nothex(substr[2]) || nothex(substr[3]) || \
+            nothex(substr[4]) || nothex(substr[5]) || nothex(substr[6]) || nothex(substr[7])) { \
             printf("Invalid origin address.\n"); \
             return 1; \
         } \
-        origin_address.i = strtoull(substr, 0, 16);
+        origin_address.i = (uint32_t)strtoul(substr, 0, 16);
 
         round(a, 0)
         round(b, 1)
@@ -692,17 +755,23 @@ int main(int argc, char *argv[]) {
     Address deployer_address;
     if (mode == 3) {
         if (strlen(input_deployer_address) == 42) {
+            if (input_deployer_address[0] != '0' || (input_deployer_address[1] != 'x' && input_deployer_address[1] != 'X')) {
+                printf("Invalid deployer address prefix\n");
+                return 1;
+            }
             input_deployer_address += 2;
         }
         char substr[9];
 
         #define round(i, offset) \
         strncpy(substr, input_deployer_address + offset * 8, 8); \
-        if (nothex(substr[0]) || nothex(substr[1]) || nothex(substr[2]) || nothex(substr[3]) || nothex(substr[4]) || nothex(substr[5]) || nothex(substr[6]) || nothex(substr[7])) { \
+        substr[8] = '\0'; \
+        if (nothex(substr[0]) || nothex(substr[1]) || nothex(substr[2]) || nothex(substr[3]) || \
+            nothex(substr[4]) || nothex(substr[5]) || nothex(substr[6]) || nothex(substr[7])) { \
             printf("Invalid deployer address.\n"); \
             return 1; \
         } \
-        deployer_address.i = strtoull(substr, 0, 16);
+        deployer_address.i = (uint32_t)strtoul(substr, 0, 16);
 
         round(a, 0)
         round(b, 1)
