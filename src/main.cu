@@ -199,18 +199,6 @@ _uint256 cpu_and_256(_uint256 x, _uint256 y) {
                     x.e & y.e, x.f & y.f, x.g & y.g, x.h & y.h};
 }
 
-// Function to check if x >= y
-bool gte_256(_uint256 x, _uint256 y) {
-    if (x.a != y.a) return x.a > y.a;
-    if (x.b != y.b) return x.b > y.b;
-    if (x.c != y.c) return x.c > y.c;
-    if (x.d != y.d) return x.d > y.d;
-    if (x.e != y.e) return x.e > y.e;
-    if (x.f != y.f) return x.f > y.f;
-    if (x.g != y.g) return x.g > y.g;
-    return x.h >= y.h;
-}
-
 #ifdef __linux__
     #define atomicMax_ul(a, b) atomicMax((unsigned long long*)(a), (unsigned long long)(b))
     #define atomicAdd_ul(a, b) atomicAdd((unsigned long long*)(a), (unsigned long long)(b))
