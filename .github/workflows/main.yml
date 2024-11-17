@@ -5,9 +5,27 @@ on:
   pull_request:
 
 jobs:
+  create_release:
+    name: 'Create Release'
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: 'Create Release'
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: nightly-${{ github.run_number }}
+          release_name: 'Nightly Build #${{ github.run_number }}'
+          draft: true
+          prerelease: false
+
   x86_64_windows:
     name: "x86_64 Windows"
     runs-on: [windows-2022]
+    needs: create_release
     permissions:
       contents: write
     steps:
@@ -28,32 +46,36 @@ jobs:
         run: |
           nvcc src/main.cu -o x86_64_windows.exe -O3 -Xptxas -v -lbcrypt -gencode arch=compute_52,code=compute_52
 
-      - uses: ncipollo/release-action@v1
+      - name: 'Upload Release Asset'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          artifacts: x86_64_windows.exe
-          token: ${{ secrets.GITHUB_TOKEN }}
-          allowUpdates: true
-          draft: true
-          replacesArtifacts: false
-
+          upload_url: ${{ needs.create_release.outputs.upload_url }}
+          asset_path: ./x86_64_windows.exe
+          asset_name: x86_64_windows.exe
+          asset_content_type: application/octet-stream
 
   x86_64_linux:
     name: "x86_64 Linux"
     runs-on: [ubuntu-22.04]
     container: nvidia/cuda:11.7.1-devel-ubuntu22.04
+    needs: create_release
     permissions:
       contents: write
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: "Build"
-      run: |
-        nvcc src/main.cu -o x86_64_linux.bin -O3 -Xptxas -v -Xcompiler -static-libgcc -Xcompiler -static-libstdc++ -gencode arch=compute_52,code=compute_52
+      - name: "Build"
+        run: |
+          nvcc src/main.cu -o x86_64_linux.bin -O3 -Xptxas -v -Xcompiler -static-libgcc -Xcompiler -static-libstdc++ -gencode arch=compute_52,code=compute_52
 
-    - uses: ncipollo/release-action@v1
-      with:
-        artifacts: x86_64_linux.bin
-        token: ${{ secrets.GITHUB_TOKEN }}
-        allowUpdates: true
-        draft: true
-        replacesArtifacts: false
+      - name: 'Upload Release Asset'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create_release.outputs.upload_url }}
+          asset_path: ./x86_64_linux.bin
+          asset_name: x86_64_linux.bin
+          asset_content_type: application/octet-stream
