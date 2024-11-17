@@ -27,7 +27,13 @@ struct _uint256 {
     uint32_t f;
     uint32_t g;
     uint32_t h;
+
+    /* Constructor for easy initialization */
+    _uint256(uint32_t a_=0, uint32_t b_=0, uint32_t c_=0, uint32_t d_=0,
+             uint32_t e_=0, uint32_t f_=0, uint32_t g_=0, uint32_t h_=0) :
+        a(a_), b(b_), c(c_), d(d_), e(e_), f(f_), g(g_), h(h_) {}
 };
+
 
 struct _uint256c {
     bool carry;
