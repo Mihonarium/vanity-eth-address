@@ -371,23 +371,29 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
         status = generate_secure_random_key(base_random_key, max_key, 255);
         random_key_increment = cpu_mul_256_mod_p(cpu_mul_256_mod_p(uint32_to_uint256(BLOCK_SIZE), uint32_to_uint256(GRID_SIZE)), uint32_to_uint256(THREAD_WORK));
     } else if (mode == 2 || mode == 3) {
-        if (salt_prefix_length > 0) {
-            int prefix_bits = salt_prefix_length;
+            if (salt_prefix_length > 0) {        int prefix_bits = salt_prefix_length;
             int random_bits = 256 - prefix_bits;
     
-            // Generate random bits
+            // **Shift the prefix to the higher bits**
+            salt_prefix = cpu_shift_left_256(salt_prefix, random_bits);
+    
+            // Generate random bits for the remaining bits
             _uint256 max_random_value = cpu_sub_256(
                 cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits),
                 _uint256{0,0,0,0,0,0,0,1}
             );
+    
             _uint256 random_bits_value;
             int status = generate_secure_random_key(random_bits_value, max_random_value, random_bits);
             if (status) {
                 // Handle error
+                message_queue_mutex.lock();
+                message_queue.push(Message{milliseconds(), 10 + status, device_index});
+                message_queue_mutex.unlock();
+                return;
             }
     
-            // No shift needed for random_bits_value; it occupies lower bits
-            // Combine prefix and random bits
+            // Combine the shifted prefix and random bits
             base_random_key = cpu_or_256(salt_prefix, random_bits_value);
     
             // Increment for random bits
@@ -395,8 +401,9 @@ void host_thread(int device, int device_index, int score_method, int mode, Addre
     
             // Mask to ensure random bits stay in their range
             _uint256 random_bits_mask = cpu_sub_256(
-                cpu_shift_left_256(_uint256{0,0,0,0,0,0,0,1}, random_bits),
-                _uint256{0,0,0,0,0,0,0,1}
+                cpu_shift_left_256(_uint256{0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+                                            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF}, random_bits),
+                _uint256{0, 0, 0, 0, 0, 0, 0, 0}
             );
         } else {
             status = generate_secure_random_key(base_random_key, max_key, 256);
