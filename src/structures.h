@@ -138,3 +138,8 @@ bool eqeq_256(_uint256 x, _uint256 y) {
 bool neq_256(_uint256 x, _uint256 y) {
     return x.a != y.a || x.b != y.b || x.c != y.c || x.d != y.d || x.e != y.e || x.f != y.f || x.g != y.g || x.h != y.h; 
 }
+
+struct SaltPrefix {
+    _uint256 prefix;
+    int length_bytes;  // Length of prefix in bytes (not hex symbols)
+};
